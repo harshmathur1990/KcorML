@@ -34,6 +34,22 @@ On Windows, activate with `.venv\Scripts\activate` instead.
 `nrgfavgenh` is enhanced NRGF. Product availability varies by observation date.
 The API currently advertises FITS for `pbavgenh`.
 
+Searches query every UTC day in the selected interval. Any response containing
+3,000 or more files is treated as potentially truncated and recursively split
+into smaller time intervals. Overlapping boundaries are deduplicated by
+instrument, product, and filename. If even a one-second interval hits the cap,
+the search fails explicitly instead of claiming completeness. Failed or
+cancelled searches discard partial results. Progress shows completed days,
+unique files found so far, and the current query. Multi-year searches can take
+a substantial amount of time and memory; the table uses a Qt model to avoid
+allocating a widget item for every cell.
+
+Cadence is applied after collecting metadata over the entire range: the earliest
+file per instrument/product/wavelength in each interval anchored at the chosen
+start time is retained. Month, quarter, and year intervals use calendar months.
+This keeps cadence independent of how requests are split, but sampling does not
+reduce the number of metadata requests.
+
 Searches and downloads run in a worker thread. Cancellation waits for the
 current request or file; requests have a 15-second connection timeout and a
 90-second read-inactivity timeout. Completed files remain after cancellation.
@@ -54,7 +70,9 @@ Email is held only in memory for this run.
 QT_QPA_PLATFORM=offscreen python -m unittest discover -s tests -v
 ```
 
-Tests cover GUI query results, filters, invalid dates, safe filenames, staged
+Tests cover multi-year coverage, capped responses, interval boundaries, global
+cadence, cancellation, search failures, GUI query results, filters, invalid dates,
+safe filenames, staged
 transfer failures, HTTPS download URLs, and skipping existing files. Real
 authenticated downloads require your registered email.
 

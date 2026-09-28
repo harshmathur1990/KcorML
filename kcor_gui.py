@@ -9,13 +9,13 @@ from urllib.parse import quote, urlsplit, urlunsplit
 
 import requests
 from mlso.api import client
-from PySide6.QtCore import QDate, QDateTime, QThread, QTime, QTimer, QUrl, Signal
-from PySide6.QtGui import QDesktopServices
+from mlso_search import search_all
+from PySide6.QtCore import QDate, QDateTime, QThread, QTime, QTimer, Signal, QAbstractTableModel, QModelIndex, Qt
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QDateTimeEdit, QFileDialog,
     QFormLayout, QGroupBox, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
     QMainWindow, QMessageBox, QPlainTextEdit, QProgressBar, QPushButton,
-    QSpinBox, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
+    QSpinBox, QTableView, QVBoxLayout, QWidget,
     QAbstractItemView,
 )
 
@@ -81,6 +81,7 @@ class Job(QThread):
     result = Signal(object)
     error = Signal(str)
     progress = Signal(int, str, str)
+    search_progress = Signal(int, int, int, str)
 
     def __init__(self, action, parent=None):
         super().__init__(parent)
@@ -97,6 +98,44 @@ def size_text(value):
     if not value:
         return 'Unknown'
     return f'{int(value) / 1024**2:,.2f} MiB'
+
+
+class FileTableModel(QAbstractTableModel):
+    headers = ['UTC observation', 'Product', 'Filename', 'Size (reported)', 'Status']
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.records = []
+        self.statuses = {}
+
+    def reset_records(self, records):
+        self.beginResetModel()
+        self.records = records
+        self.statuses = {}
+        self.endResetModel()
+
+    def rowCount(self, parent=QModelIndex()):
+        return 0 if parent.isValid() else len(self.records)
+
+    def columnCount(self, parent=QModelIndex()):
+        return 0 if parent.isValid() else len(self.headers)
+
+    def data(self, index, role=Qt.ItemDataRole.DisplayRole):
+        if not index.isValid() or role != Qt.ItemDataRole.DisplayRole:
+            return None
+        record = self.records[index.row()]
+        return [record.get('date-obs', ''), record.get('product', ''),
+                record['filename'], size_text(record.get('filesize')),
+                self.statuses.get(index.row(), 'Ready')][index.column()]
+
+    def headerData(self, section, orientation, role=Qt.ItemDataRole.DisplayRole):
+        if role == Qt.ItemDataRole.DisplayRole:
+            return self.headers[section] if orientation == Qt.Orientation.Horizontal else str(section+1)
+
+    def set_status(self, row, status):
+        self.statuses[row] = status
+        index = self.index(row, 4)
+        self.dataChanged.emit(index, index)
 
 
 class Window(QMainWindow):
@@ -169,10 +208,12 @@ class Window(QMainWindow):
 
         self.summary = QLabel('Refresh the catalog or search using the built-in K-Cor products.')
         layout.addWidget(self.summary)
-        self.table = QTableWidget(0, 5)
-        self.table.setHorizontalHeaderLabels(['UTC observation', 'Product', 'Filename', 'Size (reported)', 'Status'])
+        self.table = QTableView()
+        self.file_model = FileTableModel(self)
+        self.table.setModel(self.file_model)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        self.table.verticalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
         layout.addWidget(self.table, 1)
@@ -243,17 +284,23 @@ class Window(QMainWindow):
         self.job.result.connect(callback)
         self.job.error.connect(self.show_error)
         self.job.progress.connect(self.file_progress)
+        self.job.search_progress.connect(self.search_progress)
         self.job.finished.connect(self.job_finished)
         self.job.start()
 
     def job_finished(self):
+        self.job.wait()  # Join native thread cleanup before releasing the Qt object.
         self.job.deleteLater()
         self.job = None
-        self.progress.setRange(0, 100)
+        if self.progress.maximum() == 0:
+            self.progress.setRange(0, 100)
+            self.progress.setValue(0)
         self.set_busy(False)
 
     def show_error(self, message):
         self.log.appendPlainText(message)
+        if message.startswith('RuntimeError: Search incomplete'):
+            self.summary.setText('Search failed — incomplete results discarded. See the error log.')
         QMessageBox.warning(self, 'MLSO request failed', message)
 
     def cancel_job(self):
@@ -306,7 +353,7 @@ class Window(QMainWindow):
     def product_changed(self):
         self.description.setText(self.product.currentData(3) or '')
         self.records = []
-        self.table.setRowCount(0)
+        self.file_model.reset_records([])
         self.summary.setText('Search to list files for this product.')
         self.selected.setEnabled(False)
         self.all_files.setEnabled(False)
@@ -337,24 +384,27 @@ class Window(QMainWindow):
             self.show_error(str(exc))
             return
         self.records = []
-        self.table.setRowCount(0)
+        self.file_model.reset_records([])
+        self.summary.setText('Search in progress — results are not complete yet.')
         def fetch(job):
-            result = client.files(instrument, product, filters, base_url=BASE_URL)
-            return None if job.isInterruptionRequested() else result
+            return search_all(instrument, product, filters,
+                              cancelled=job.isInterruptionRequested,
+                              progress=job.search_progress.emit)
         def loaded(result):
             if result is None:
                 self.summary.setText('Search cancelled.')
                 return
             self.records = result['files']
-            self.table.setRowCount(len(self.records))
-            for row, record in enumerate(self.records):
-                values = [record.get('date-obs', ''), record.get('product', ''), record['filename'], size_text(record.get('filesize')), 'Ready']
-                for col, value in enumerate(values):
-                    self.table.setItem(row, col, QTableWidgetItem(value))
+            self.file_model.reset_records(self.records)
             total = sum(r.get('filesize', 0) or 0 for r in self.records)
-            self.summary.setText(f'{instrument} / {product}: {len(self.records):,} files • reported total {size_text(total)} (sizes may be incomplete)')
-            self.progress.setValue(0)
+            self.summary.setText(f'Complete — {instrument} / {product}: {len(self.records):,} files • reported total {size_text(total)} (sizes may be incomplete)')
+            self.log.appendPlainText(f"Complete: {len(self.records):,} files from {result['requests']:,} API requests.")
         self.launch(fetch, loaded, f'Searching {instrument}/{product}…')
+
+    def search_progress(self, done, total, count, message):
+        self.progress.setRange(0, total)
+        self.progress.setValue(done)
+        self.summary.setText(f'Searching: {done:,}/{total:,} days • {count:,} unique files so far. {message}')
 
     def browse(self):
         folder = QFileDialog.getExistingDirectory(self, 'Download folder', self.folder.text())
@@ -396,7 +446,7 @@ class Window(QMainWindow):
         self.launch(transfer, self.log.appendPlainText, f'Downloading {len(rows)} files to {destination}…')
 
     def file_progress(self, row, status, message):
-        self.table.item(row, 4).setText(status)
+        self.file_model.set_status(row, status)
         if status != 'Downloading…':
             self.download_done += 1
         self.progress.setRange(0, self.download_total)

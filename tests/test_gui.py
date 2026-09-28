@@ -5,6 +5,7 @@ import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
+from PySide6.QtCore import QCoreApplication, QEvent
 from PySide6.QtWidgets import QApplication
 from kcor_gui import Window, client, download_one
 
@@ -19,6 +20,8 @@ class DownloaderTests(unittest.TestCase):
 
     def tearDown(self):
         self.window.close()
+        self.window.deleteLater()
+        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
 
     def wait(self):
         deadline = time.monotonic() + 5
@@ -45,7 +48,7 @@ class DownloaderTests(unittest.TestCase):
             self.window.search_files()
             self.wait()
             self.assertEqual(request.call_args.args[:2], ('kcor', 'pbavgenh'))
-            self.assertEqual(self.window.table.rowCount(), 1)
+            self.assertEqual(self.window.file_model.rowCount(), 1)
             self.assertTrue(self.window.all_files.isEnabled())
         with patch.object(client, 'files', return_value={'files': []}):
             self.window.search_files()
