@@ -42,6 +42,8 @@
     "frame_drop_probability": 0.05,
     "device": "cuda",
     "output_dir": "artifacts/training",
-    "resume_checkpoint": null
+    "resume_checkpoint": null,
+    "log_every_steps": 25,
+    "progress_bar": true
   }
 }

@@ -5,6 +5,8 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+import torch
+
 from kcor_ml.config import ExperimentConfig
 from kcor_ml.data.builder import DataBuilder
 from kcor_ml.data.discovery import create_manifest
@@ -56,9 +58,22 @@ def main() -> None:
     if arguments.index:
         build_manifest(config)
         return
+    print(f"loading pair manifest: {config.data.manifest}", flush=True)
     manifest = PairManifest.load(config.data.manifest)
+    counts = {split: len(pairs) for split, pairs in manifest.splits.items()}
+    print(f"pair counts: {counts}", flush=True)
     loaders = DataBuilder(config.data).build(manifest)
+    print(f"building model on requested device: {config.train.device}", flush=True)
     components = ModelBuilder(config).build()
+    parameter_count = sum(parameter.numel() for parameter in components.model.parameters())
+    device_description = str(components.device)
+    if components.device.type == "cuda":
+        device_description += f" ({torch.cuda.get_device_name(components.device)})"
+    print(
+        f"model ready: parameters={parameter_count:,} device={device_description} "
+        f"mixed_precision={config.train.mixed_precision}",
+        flush=True,
+    )
     if arguments.train:
         Trainer(config, components).fit(loaders.train, loaders.validation)
         return

@@ -88,6 +88,8 @@ class TrainConfig:
     device: str = "cuda"
     output_dir: str = "artifacts/training"
     resume_checkpoint: str | None = None
+    log_every_steps: int = 25
+    progress_bar: bool = True
 
     def validate(self) -> None:
         if self.epochs < 1 or self.learning_rate <= 0:
@@ -98,6 +100,8 @@ class TrainConfig:
             raise ValueError("mask_patch_size must be positive")
         if not 0 <= self.frame_drop_probability < 1:
             raise ValueError("frame_drop_probability must be in [0, 1)")
+        if self.log_every_steps < 1:
+            raise ValueError("log_every_steps must be positive")
 
 
 @dataclass(slots=True)

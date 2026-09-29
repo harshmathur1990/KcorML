@@ -8,6 +8,7 @@ from typing import Iterator
 
 import torch
 from torch.nn.utils import clip_grad_norm_
+from tqdm.auto import tqdm
 
 from ..config import ExperimentConfig
 from ..data.masking import PairMasker
@@ -42,13 +43,31 @@ class Trainer:
         delta_t = batch["delta_t"].to(device, non_blocking=True)
         return images, valid, delta_t
 
-    def run_epoch(self, loader: Iterator[dict[str, object]], *, training: bool) -> dict[str, float]:
+    def run_epoch(
+        self,
+        loader: Iterator[dict[str, object]],
+        *,
+        training: bool,
+        epoch: int | None = None,
+    ) -> dict[str, float]:
         model = self.components.model
         model.train(training)
         metrics = MeanMetrics()
+        phase = "train" if training else "validation"
+        total_steps = len(loader) if hasattr(loader, "__len__") else None
+        epoch_label = f" epoch {epoch}/{self.config.train.epochs}" if epoch is not None else ""
+        progress = tqdm(
+            loader,
+            total=total_steps,
+            desc=f"{phase}{epoch_label}",
+            unit="batch",
+            dynamic_ncols=True,
+            leave=True,
+            disable=not self.config.train.progress_bar,
+        )
         context = torch.enable_grad if training else torch.no_grad
         with context():
-            for batch in loader:
+            for step, batch in enumerate(progress, start=1):
                 target, valid, delta_t = self._move_batch(batch)
                 corrupted, hidden = self.masker(target, valid)
                 if training:
@@ -63,6 +82,15 @@ class Trainer:
                     self.scaler.step(self.components.optimizer)
                     self.scaler.update()
                 metrics.update(breakdown.detached())
+                if step == 1 or step % self.config.train.log_every_steps == 0:
+                    current = metrics.compute()
+                    progress.set_postfix(
+                        loss=f"{current['total']:.5g}",
+                        observation=f"{current['observation']:.5g}",
+                        lr=f"{self.components.optimizer.param_groups[0]['lr']:.3g}",
+                        refresh=True,
+                    )
+        progress.close()
         return metrics.compute()
 
     def fit(self, train_loader, validation_loader) -> dict[str, float]:
@@ -81,8 +109,11 @@ class Trainer:
 
         last_validation: dict[str, float] = {}
         for epoch in range(start_epoch, self.config.train.epochs):
-            train_metrics = self.run_epoch(train_loader, training=True)
-            validation_metrics = self.run_epoch(validation_loader, training=False)
+            epoch_number = epoch + 1
+            train_metrics = self.run_epoch(train_loader, training=True, epoch=epoch_number)
+            validation_metrics = self.run_epoch(
+                validation_loader, training=False, epoch=epoch_number
+            )
             self.components.scheduler.step()
             last_validation = validation_metrics
             validation_loss = validation_metrics["total"]
@@ -100,8 +131,8 @@ class Trainer:
                 checkpoint_arguments["best_validation_loss"] = best
                 save_checkpoint(self.output_dir / "best.pt", **checkpoint_arguments)
             print(
-                f"epoch={epoch + 1} train={train_metrics['total']:.6g} "
-                f"validation={validation_loss:.6g}"
+                f"epoch={epoch_number} train={train_metrics['total']:.6g} "
+                f"validation={validation_loss:.6g}",
+                flush=True,
             )
         return last_validation
-
