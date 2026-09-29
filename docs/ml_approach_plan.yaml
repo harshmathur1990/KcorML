@@ -1,0 +1,493 @@
+schema_version: "1.0"
+document:
+  id: "kcor-pb2-neural-restoration-plan"
+  title: "End-to-End Neural Restoration and CME Detection for K-Cor Level-2 pB"
+  status: "draft"
+  created: "2026-09-28"
+  owners: []
+  repository: "KcorML"
+
+objective:
+  primary: >-
+    Train an end-to-end neural network that accepts two temporally adjacent
+    K-Cor White Light Level-2 pB images and produces denoised physical-pB
+    images, learned flattened-corona representations, learned two-dimensional
+    normalization fields, spatial uncertainty estimates, and CME probability
+    maps while preserving faint transient coronal structure.
+  scientific_priority: >-
+    Increase the detectability of faint CMEs without using NRGF products and
+    without turning low-signal outer-corona noise into apparent structure.
+
+constraints:
+  required:
+    - "Use K-Cor White Light Level-2 pB data selected as product pb2."
+    - "Each sample contains two observations separated by no more than 15 seconds."
+    - "Use the two pB frames as the observational image inputs."
+    - "Learn the coronal brightness gradient and spatial noise behavior inside the neural model."
+    - "Preserve a clean output in physical pB units."
+    - "Produce a learned flattened-corona output without NRGF."
+  prohibited:
+    - "Do not use NRGF data as an input or target."
+    - "Do not calculate explicit I1-I2, running-difference, or base-difference images as model inputs or training targets."
+    - "Do not fit or apply a handcrafted radial brightness profile."
+    - "Do not create a handcrafted noise map outside the network."
+    - "Do not use a conventional image-processing denoiser in the production pipeline."
+    - "Do not use GAN or diffusion outputs as scientific measurements."
+  allowed_ingestion_operations:
+    - "Read FITS image arrays and metadata."
+    - "Reject corrupt files and samples violating the time-separation constraint."
+    - "Apply FITS validity, occulting-disk, and missing-pixel masks."
+    - "Convert arrays to tensors and use a learnable in-model input scaling layer."
+    - "Apply training-only geometric augmentation consistently to both frames and labels."
+
+problem_formulation:
+  observation_model: "Y_i = B_i * C_i + N_i, for i in {1, 2}"
+  learned_components:
+    B_i:
+      name: "normalization_field"
+      meaning: "Positive, low-spatial-bandwidth two-dimensional brightness-gradient field."
+    C_i:
+      name: "flat_corona"
+      meaning: "Denoised normalized coronal structure containing static and dynamic features."
+    N_i:
+      name: "observation_noise"
+      meaning: "Spatially varying, signal-dependent, potentially heavy-tailed noise distribution."
+    S_i:
+      name: "clean_physical_pb"
+      definition: "S_i = B_i * C_i"
+  identifiability_note: >-
+    Unlabelled two-frame reconstruction alone cannot guarantee that every faint
+    transient is assigned to coronal signal rather than noise. CME-labelled or
+    physically simulated transient examples are required before claiming faint
+    CME preservation.
+
+data_contract:
+  sample:
+    inputs:
+      frame_1:
+        source: "K-Cor pb2 FITS image"
+        shape: "[1, H, W]"
+        units: "FITS-provided Level-2 pB units"
+      frame_2:
+        source: "K-Cor pb2 FITS image"
+        shape: "[1, H, W]"
+        units: "FITS-provided Level-2 pB units"
+      delta_t_seconds:
+        source: "FITS observation timestamps"
+        constraint: "0 < delta_t_seconds <= 15"
+      valid_mask:
+        source: "FITS validity information and instrument geometry"
+        shape: "[1, H, W]"
+      metadata:
+        initial_fields:
+          - "observation timestamp"
+          - "exposure information when available"
+          - "quality flags when available"
+          - "solar-center and plate-scale metadata when available"
+    optional_targets:
+      cme_mask:
+        type: "binary segmentation mask"
+        required_for: "supervised CME-head fine-tuning"
+      cme_event_label:
+        type: "binary or categorical event label"
+        required_for: "weakly supervised CME-head fine-tuning"
+      simulated_clean_components:
+        type: "clean pB, normalization field, transient mask, and noise realization"
+        required_for: "controlled preservation and identifiability experiments"
+  pairing:
+    ordering: "chronological"
+    maximum_separation_seconds: 15
+    duplicate_policy: "reject exact duplicate timestamps"
+    missing_partner_policy: "omit sample"
+  splitting:
+    unit: "complete observing date"
+    prohibited: "Do not randomly split adjacent frames across train, validation, and test sets."
+    stratification:
+      - "known CME versus quiet dates"
+      - "observing year and season"
+      - "available quality conditions"
+
+model:
+  name: "TwoFrameHeteroscedasticDecompositionNet"
+  abbreviation: "TF-HDN"
+  input_interface:
+    image_tensor_shape: "[B, 2, H, W]"
+    additional_inputs:
+      - "delta_t_seconds"
+      - "valid_mask"
+      - "selected metadata embeddings"
+    position_encoding: "learned two-dimensional positional embeddings"
+    scaling: "learnable monotonic input scaling initialized for pB dynamic range"
+  encoders:
+    count: 2
+    weight_sharing: true
+    family: "residual ConvNeXt-style encoder"
+    levels: 4
+    channels: [32, 64, 128, 256]
+    normalization: "GroupNorm"
+    activation: "SiLU"
+  temporal_fusion:
+    type: "multiscale deformable cross-attention"
+    requirements:
+      - "Fuse information in both temporal directions."
+      - "Permit moving features to remain frame-specific."
+      - "Avoid mandatory temporal averaging."
+  latent_spaces:
+    common:
+      purpose: "Persistent coronal structure and broad brightness field."
+    dynamic_1:
+      purpose: "Frame-1-specific physical structure and transient state."
+    dynamic_2:
+      purpose: "Frame-2-specific physical structure and transient state."
+    noise_1:
+      purpose: "Frame-1-specific observation corruption."
+    noise_2:
+      purpose: "Frame-2-specific observation corruption."
+  decoders:
+    normalization:
+      outputs: ["B_1", "B_2"]
+      positivity: "softplus plus epsilon"
+      implementation: "coarse latent grid followed by learned upsampling"
+      restriction: "No full-resolution skip connections from the raw image encoders."
+    flat_corona:
+      outputs: ["C_1", "C_2"]
+      weight_sharing: true
+      receives: ["common", "dynamic_i", "temporally fused encoder features"]
+    physical_pb:
+      outputs: ["S_1", "S_2"]
+      implementation: "differentiable in-model multiplication S_i = B_i * C_i"
+    noise:
+      outputs:
+        - "noise_location_1"
+        - "noise_scale_1"
+        - "noise_tail_1"
+        - "noise_location_2"
+        - "noise_scale_2"
+        - "noise_tail_2"
+      initial_distribution: "heteroscedastic Student-t"
+      future_candidate: "conditional normalizing flow"
+    cme:
+      outputs: ["cme_probability_1", "cme_probability_2"]
+      receives: ["common", "dynamic_1", "dynamic_2", "multiscale fused features"]
+      activation: "sigmoid"
+  required_outputs:
+    - "clean_pb_1"
+    - "clean_pb_2"
+    - "flat_corona_1"
+    - "flat_corona_2"
+    - "normalization_field_1"
+    - "normalization_field_2"
+    - "noise_scale_1"
+    - "noise_scale_2"
+    - "cme_probability_1"
+    - "cme_probability_2"
+
+training:
+  strategy: "self-supervised pretraining followed by transient-preservation and CME fine-tuning"
+  self_supervision:
+    corruption:
+      method: "random spatial patch masking and whole-frame dropout"
+      rule: "Masking is applied only during training and is never saved as an image product."
+      modes:
+        - "mask random patches in frame 1"
+        - "mask random patches in frame 2"
+        - "drop frame 1 while retaining its temporal slot"
+        - "drop frame 2 while retaining its temporal slot"
+    targets: "Original observed pixels at masked locations"
+    leakage_control: "Loss is evaluated only where observational values were hidden from the relevant prediction path."
+  stages:
+    - id: "T0"
+      name: "data and loader validation"
+      trainable_components: []
+      exit_gate:
+        - "All samples are confirmed as pb2."
+        - "All pairs satisfy the time constraint."
+        - "Date-grouped splits contain no frame leakage."
+    - id: "T1"
+      name: "two-frame masked reconstruction baseline"
+      trainable_components: ["encoders", "temporal_fusion", "flat_corona", "physical_pb"]
+      fixed_components: ["cme"]
+      exit_gate:
+        - "Model does not collapse to constant or identity output."
+        - "Swap-equivariance test passes within configured tolerance."
+    - id: "T2"
+      name: "joint normalization and heteroscedastic noise learning"
+      trainable_components: ["normalization", "noise", "all T1 components"]
+      exit_gate:
+        - "Normalization fields are positive and low-bandwidth."
+        - "Standardized residual coverage is calibrated on held-out dates."
+        - "Clean-pB reconstruction remains photometrically stable across radius."
+    - id: "T3"
+      name: "faint-transient preservation"
+      trainable_components: ["all restoration components"]
+      data_requirements:
+        - "labelled real CME sequences or controlled simulated transients"
+      exit_gate:
+        - "Transient flux recovery exceeds the configured baseline."
+        - "No statistically significant increase in quiet-date false structures."
+    - id: "T4"
+      name: "CME-head fine-tuning"
+      trainable_components: ["cme", "optionally upper restoration layers"]
+      data_requirements:
+        - "pixel masks or event-level CME annotations"
+      exit_gate:
+        - "Detection recall improves at a fixed false-alarm rate on held-out dates."
+    - id: "T5"
+      name: "end-to-end scientific validation"
+      trainable_components: []
+      exit_gate:
+        - "All acceptance criteria pass on the untouched test set."
+  losses:
+    observation_nll:
+      distribution: "Student-t"
+      applies_to: "masked valid observations from both frames"
+      purpose: "Learn clean reconstruction and spatially variable heavy-tailed uncertainty."
+    common_latent_consistency:
+      purpose: "Keep persistent information in the common latent representation."
+    noise_independence:
+      purpose: "Discourage common solar structure from entering frame-specific noise latents."
+    swap_equivariance:
+      purpose: "Swapping input frames must swap all frame-specific outputs."
+    normalization_bandwidth:
+      purpose: "Prevent the normalization decoder from absorbing fine coronal structures."
+    reconstruction_identity:
+      definition: "Predicted observation location equals B_i * C_i plus learned noise location."
+    cme_segmentation:
+      initial: "focal plus soft-Dice"
+      enabled_in_stages: ["T4"]
+    transient_preservation:
+      purpose: "Preserve the intensity and morphology of labelled or simulated faint transients."
+      enabled_in_stages: ["T3", "T4"]
+
+evaluation:
+  split_policy: "Evaluate only on complete held-out dates."
+  restoration_metrics:
+    - id: "masked_nll"
+      direction: "lower_is_better"
+    - id: "uncertainty_coverage"
+      direction: "closer_to_nominal_is_better"
+    - id: "radial_photometric_bias"
+      direction: "closer_to_zero_is_better"
+    - id: "temporal_swap_error"
+      direction: "lower_is_better"
+    - id: "normalization_high_frequency_energy"
+      direction: "lower_is_better_subject_to_reconstruction"
+    - id: "quiet_sequence_false_structure_rate"
+      direction: "lower_is_better"
+  transient_metrics:
+    - id: "faint_transient_flux_recovery"
+      direction: "closer_to_one_is_better"
+    - id: "faint_transient_boundary_recall"
+      direction: "higher_is_better"
+    - id: "transient_centroid_displacement_error"
+      direction: "lower_is_better"
+  detection_metrics:
+    - id: "event_recall_at_fixed_false_alarm_rate"
+      direction: "higher_is_better"
+    - id: "pixel_auprc"
+      direction: "higher_is_better"
+    - id: "time_to_first_detection"
+      direction: "lower_is_better"
+  baselines:
+    required:
+      - "raw pb2 detector performance"
+      - "single-frame masked neural restoration"
+      - "two-frame concatenation U-Net without decomposition"
+    diagnostic_only:
+      - "available archive visualization products must not be used as training targets"
+  acceptance_criteria:
+    - id: "A1"
+      statement: "No prohibited product or preprocessing operation is used."
+      threshold: "zero violations"
+    - id: "A2"
+      statement: "Restoration improves masked held-out likelihood over the single-frame neural baseline."
+      threshold: "statistically significant improvement on held-out dates"
+    - id: "A3"
+      statement: "Faint-transient preservation is not worse than raw pb2 at matched false-structure rate."
+      threshold: "non-inferior; numerical margin to be defined before T3"
+    - id: "A4"
+      statement: "CME detection improves over raw pb2 at the same false-alarm rate."
+      threshold: "numerical target to be defined before T4"
+    - id: "A5"
+      statement: "Uncertainty is calibrated across inner, middle, and outer field regions."
+      threshold: "coverage tolerance to be defined before T2"
+
+implementation:
+  proposed_stack:
+    language: "Python 3.10+"
+    framework: "PyTorch"
+    configuration: "YAML"
+    experiment_tracking: "to_be_selected"
+    data_loading: "Astropy FITS plus PyTorch Dataset/DataLoader"
+  modules:
+    - path: "kcor_ml/data/pb2_dataset.py"
+      responsibility: "Discover pb2 FITS files, construct valid pairs, and enforce date-grouped splits."
+    - path: "kcor_ml/models/encoder.py"
+      responsibility: "Shared multiscale image encoder."
+    - path: "kcor_ml/models/temporal_fusion.py"
+      responsibility: "Bidirectional deformable temporal attention."
+    - path: "kcor_ml/models/decomposition.py"
+      responsibility: "Common, dynamic, and noise latent decomposition."
+    - path: "kcor_ml/models/decoders.py"
+      responsibility: "Normalization, flat-corona, physical-pB, uncertainty, and CME heads."
+    - path: "kcor_ml/models/tf_hdn.py"
+      responsibility: "Top-level model and typed output contract."
+    - path: "kcor_ml/losses.py"
+      responsibility: "Self-supervised likelihood and latent-separation objectives."
+    - path: "kcor_ml/train.py"
+      responsibility: "Stage-aware training and checkpointing."
+    - path: "kcor_ml/evaluate.py"
+      responsibility: "Held-out restoration, uncertainty, transient, and CME evaluation."
+    - path: "kcor_ml/infer.py"
+      responsibility: "Generate all required scientific and detection outputs for a frame pair."
+    - path: "tests/test_pb2_dataset.py"
+      responsibility: "Validate pairing, product selection, masks, and split isolation."
+    - path: "tests/test_tf_hdn.py"
+      responsibility: "Validate shapes, positivity, swap behavior, and differentiability."
+    - path: "tests/test_losses.py"
+      responsibility: "Validate masking and loss leakage controls."
+  output_format:
+    preferred: "multi-extension FITS"
+    extensions:
+      - "CLEAN_PB_1"
+      - "CLEAN_PB_2"
+      - "FLAT_CORONA_1"
+      - "FLAT_CORONA_2"
+      - "NORM_FIELD_1"
+      - "NORM_FIELD_2"
+      - "NOISE_SCALE_1"
+      - "NOISE_SCALE_2"
+      - "CME_PROB_1"
+      - "CME_PROB_2"
+      - "VALID_MASK"
+    provenance:
+      - "source filenames"
+      - "source observation timestamps"
+      - "model version"
+      - "checkpoint identifier"
+      - "configuration hash"
+
+milestones:
+  - id: "M1"
+    name: "Reproducible pb2 dataset"
+    depends_on: []
+    deliverables:
+      - "pair manifest"
+      - "date-grouped split manifest"
+      - "dataset tests"
+    status: "not_started"
+  - id: "M2"
+    name: "Two-frame neural baseline"
+    depends_on: ["M1"]
+    deliverables:
+      - "shared encoder"
+      - "temporal fusion"
+      - "masked self-supervised trainer"
+    status: "not_started"
+  - id: "M3"
+    name: "Joint decomposition and uncertainty"
+    depends_on: ["M2"]
+    deliverables:
+      - "normalization decoder"
+      - "flat-corona decoder"
+      - "Student-t observation decoder"
+      - "calibration evaluation"
+    status: "not_started"
+  - id: "M4"
+    name: "Faint-transient validation"
+    depends_on: ["M3"]
+    deliverables:
+      - "real labels or controlled simulated-transient dataset"
+      - "preservation metrics"
+      - "failure-case review"
+    status: "not_started"
+  - id: "M5"
+    name: "CME detection"
+    depends_on: ["M4"]
+    deliverables:
+      - "CME head"
+      - "event and segmentation evaluation"
+      - "operating threshold selection"
+    status: "not_started"
+  - id: "M6"
+    name: "Scientific inference product"
+    depends_on: ["M5"]
+    deliverables:
+      - "FITS inference writer"
+      - "provenance metadata"
+      - "end-to-end test"
+    status: "not_started"
+
+risks:
+  - id: "R1"
+    risk: "Faint CME signal is assigned to the noise latent."
+    severity: "critical"
+    mitigation:
+      - "Reserve a dynamic latent path."
+      - "Use real CME labels or controlled simulated transients before acceptance."
+      - "Measure flux recovery and quiet-sequence false structures."
+  - id: "R2"
+    risk: "Normalization field absorbs streamers or CME morphology."
+    severity: "critical"
+    mitigation:
+      - "Generate the field from a coarse decoder."
+      - "Remove raw-image full-resolution skip connections from that decoder."
+      - "Monitor normalization high-frequency energy."
+  - id: "R3"
+    risk: "Noise decoder becomes a shortcut that explains all observations."
+    severity: "high"
+    mitigation:
+      - "Constrain noise latents and use cross-view masked reconstruction."
+      - "Monitor signal content in sampled noise realizations."
+  - id: "R4"
+    risk: "Model learns date, weather, or instrument shortcuts."
+    severity: "high"
+    mitigation:
+      - "Split by complete dates."
+      - "Evaluate across years, seasons, and quality regimes."
+  - id: "R5"
+    risk: "Flexible model hallucinates visually plausible coronal structure."
+    severity: "critical"
+    mitigation:
+      - "Avoid adversarial and diffusion reconstruction objectives."
+      - "Retain physical-pB and uncertainty outputs."
+      - "Require quiet-sequence false-structure evaluation."
+  - id: "R6"
+    risk: "Full-resolution training exceeds available GPU memory."
+    severity: "medium"
+    mitigation:
+      - "Train on paired crops while retaining positional embeddings."
+      - "Use mixed precision and gradient accumulation."
+      - "Validate inference with tiled overlap and seam tests if required."
+
+open_decisions:
+  - id: "D1"
+    question: "Are pixel-level CME masks, event-level labels, or only event timestamps available?"
+    needed_before: "T3"
+    status: "open"
+  - id: "D2"
+    question: "What GPU memory and training-time budget are available?"
+    needed_before: "M2"
+    status: "open"
+  - id: "D3"
+    question: "Should the first model operate at full 1024x1024 resolution or use positional crops?"
+    needed_before: "M2"
+    status: "open"
+  - id: "D4"
+    question: "Which FITS header field definitively identifies the downloaded product as pb2?"
+    needed_before: "M1"
+    status: "open"
+  - id: "D5"
+    question: "Which observing years and known CME catalogs will define the untouched test set?"
+    needed_before: "M1"
+    status: "open"
+
+next_actions:
+  - order: 1
+    action: "Resolve open decisions D2, D4, and D5."
+  - order: 2
+    action: "Implement M1 without modifying the existing downloader behavior."
+  - order: 3
+    action: "Create a minimal M2 experiment configuration and shape-level model tests."
+  - order: 4
+    action: "Train M2 and review failure cases before enabling decomposition heads."

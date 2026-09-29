@@ -1,0 +1,47 @@
+{
+  "data": {
+    "root": "data",
+    "manifest": "artifacts/pb2_pairs.json",
+    "expected_product": "pb2",
+    "max_delta_seconds": 15.0,
+    "crop_size": 256,
+    "batch_size": 2,
+    "num_workers": 4,
+    "pin_memory": true,
+    "train_fraction": 0.8,
+    "validation_fraction": 0.1,
+    "seed": 17
+  },
+  "model": {
+    "name": "tf_hdn",
+    "channels": [32, 64, 128, 256],
+    "blocks_per_level": 2,
+    "group_norm_groups": 8,
+    "maximum_offset_pixels": 4.0,
+    "input_scale": 1e-8,
+    "minimum_noise_scale": 1e-10,
+    "positional_grid_size": 32,
+    "time_scale_seconds": 15.0
+  },
+  "loss": {
+    "observation_weight": 1.0,
+    "normalization_bandwidth_weight": 0.001,
+    "noise_independence_weight": 0.001,
+    "common_consistency_weight": 0.01,
+    "cme_weight": 0.0
+  },
+  "train": {
+    "epochs": 100,
+    "learning_rate": 0.001,
+    "weight_decay": 0.0001,
+    "minimum_learning_rate": 0.000001,
+    "gradient_clip": 1.0,
+    "mixed_precision": true,
+    "mask_fraction": 0.05,
+    "mask_patch_size": 8,
+    "frame_drop_probability": 0.05,
+    "device": "cuda",
+    "output_dir": "artifacts/training",
+    "resume_checkpoint": null
+  }
+}

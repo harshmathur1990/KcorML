@@ -79,3 +79,32 @@ authenticated downloads require your registered email.
 References: [official MLSO API](https://www2.hao.ucar.edu/mlso/mlso-api),
 [client documentation](https://mlso-api-client.readthedocs.io/en/v1.0.0/),
 [MLSO data use](https://www2.hao.ucar.edu/mlso).
+
+## Neural restoration scaffold
+
+The `kcor_ml` package implements the initial modular scaffold described in
+[`docs/ml_approach_plan.yaml`](docs/ml_approach_plan.yaml). Its responsibilities
+are separated into FITS discovery and temporal pairing, datasets and loaders,
+model components, model construction, probabilistic losses, training,
+checkpoints, and FITS inference output. The code intentionally contains no FSDP
+or distributed-training path.
+
+Install the additional ML dependencies separately:
+
+```sh
+python -m pip install -r requirements-ml.txt
+```
+
+Edit `configs/default.json`, then build the leakage-safe pair manifest and train:
+
+```sh
+python pipeline.py --config configs/default.json --index
+python pipeline.py --config configs/default.json --train
+```
+
+Evaluate or generate a multi-extension FITS product with a checkpoint:
+
+```sh
+python pipeline.py --config configs/default.json --evaluate --checkpoint artifacts/training/best.pt
+python pipeline.py --config configs/default.json --predict --checkpoint artifacts/training/best.pt --pair-index 0
+```
