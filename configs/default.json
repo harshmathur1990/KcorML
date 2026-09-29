@@ -2,7 +2,7 @@
   "data": {
     "root": "data",
     "manifest": "artifacts/pb2_pairs.json",
-    "expected_product": "pb2",
+    "expected_product": "pb",
     "max_delta_seconds": 15.0,
     "crop_size": 256,
     "batch_size": 2,
