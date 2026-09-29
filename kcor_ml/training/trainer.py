@@ -41,22 +41,64 @@ class Trainer:
         radius = batch["radial_coordinate"].to(device, non_blocking=True)
         return images, valid, delta_t, radius
 
-    @staticmethod
+    def _blind_spot_mask(
+        self,
+        valid: torch.Tensor,
+        *,
+        training: bool,
+        step: int,
+        direction: int,
+    ) -> torch.Tensor:
+        batch, _, height, width = valid.shape
+        patch = self.config.train.mask_patch_size
+        coarse_h = (height + patch - 1) // patch
+        coarse_w = (width + patch - 1) // patch
+        if training:
+            coarse = torch.rand(
+                (batch, 1, coarse_h, coarse_w), device=valid.device
+            ) < self.config.train.mask_fraction
+        else:
+            period = max(2, round(1.0 / self.config.train.mask_fraction))
+            y = torch.arange(coarse_h, device=valid.device).reshape(1, 1, -1, 1)
+            x = torch.arange(coarse_w, device=valid.device).reshape(1, 1, 1, -1)
+            coarse = ((3 * y + 5 * x + step + direction) % period == 0).expand(
+                batch, -1, -1, -1
+            )
+        return coarse.repeat_interleave(patch, -2).repeat_interleave(patch, -1)[
+            ..., :height, :width
+        ]
+
     def _cross_frame_view(
-        target: torch.Tensor, valid: torch.Tensor, direction: int
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Hide the target frame completely; never form an image difference."""
+        self,
+        target: torch.Tensor,
+        valid: torch.Tensor,
+        direction: int,
+        *,
+        training: bool,
+        step: int,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Hide the target and blind source pixels; never form a difference."""
         inputs = target.clone()
         loss_mask = torch.zeros_like(valid)
+        component_mask = torch.zeros_like(valid)
+        blind = self._blind_spot_mask(
+            valid, training=training, step=step, direction=direction
+        )[:, 0]
         if direction == 0:
             inputs[:, 1] = 0.0
-            loss_mask[:, 1] = valid[:, 1]
+            selected = blind & valid[:, 0] & valid[:, 1]
+            inputs[:, 0] = inputs[:, 0].masked_fill(selected, 0.0)
+            loss_mask[:, 1] = selected
+            component_mask[:, 1] = valid[:, 1]
         elif direction == 1:
             inputs[:, 0] = 0.0
-            loss_mask[:, 0] = valid[:, 0]
+            selected = blind & valid[:, 0] & valid[:, 1]
+            inputs[:, 1] = inputs[:, 1].masked_fill(selected, 0.0)
+            loss_mask[:, 0] = selected
+            component_mask[:, 0] = valid[:, 0]
         else:
             raise ValueError(f"invalid cross-frame direction: {direction}")
-        return inputs, loss_mask
+        return inputs, loss_mask, component_mask
 
     def run_epoch(
         self,
@@ -91,7 +133,13 @@ class Trainer:
                 else:
                     directions = (0, 1)
                 for direction in directions:
-                    cross_input, loss_mask = self._cross_frame_view(target, valid, direction)
+                    cross_input, loss_mask, component_mask = self._cross_frame_view(
+                        target,
+                        valid,
+                        direction,
+                        training=training,
+                        step=step,
+                    )
                     if training:
                         self.components.optimizer.zero_grad(set_to_none=True)
                     with self._autocast():
@@ -101,6 +149,7 @@ class Trainer:
                             target,
                             loss_mask,
                             radial_coordinate=radius,
+                            component_mask=component_mask,
                         )
                     if not torch.isfinite(breakdown.total):
                         paths = batch.get("paths", "unknown")
@@ -118,7 +167,7 @@ class Trainer:
                     values.update(
                         decomposition_diagnostics(
                             output,
-                            loss_mask,
+                            component_mask,
                             self.config.model.log_component_limit,
                             radius,
                         )
@@ -171,6 +220,10 @@ class Trainer:
                     >= self.config.train.minimum_normalization_log_std
                     and validation_metrics["log_saturation_fraction"]
                     <= self.config.train.maximum_log_saturation_fraction
+                    and validation_metrics["flat_radial_rms"]
+                    <= self.config.train.maximum_flat_radial_rms
+                    and validation_metrics["noise_structure_correlation"]
+                    <= self.config.train.maximum_noise_structure_correlation
                 )
                 improved = checkpoint_eligible and validation_loss < best
                 if improved:
@@ -191,6 +244,8 @@ class Trainer:
                     f"epoch={epoch_number} train={train_metrics['total']:.6g} "
                     f"validation={validation_loss:.6g} "
                     f"norm_radial_std={validation_metrics['normalization_radial_log_std']:.4g} "
+                    f"flat_radial_rms={validation_metrics['flat_radial_rms']:.4g} "
+                    f"noise_corr={validation_metrics['noise_structure_correlation']:.3g} "
                     f"saturation={validation_metrics['log_saturation_fraction']:.3g} "
                     f"checkpoint_eligible={checkpoint_eligible}",
                     flush=True,

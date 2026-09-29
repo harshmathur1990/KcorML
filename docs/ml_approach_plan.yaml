@@ -108,8 +108,8 @@ data_contract:
       - "available quality conditions"
 
 model:
-  name: "TwoFrameHeteroscedasticDecompositionNetV2"
-  abbreviation: "TF-HDN-v2"
+  name: "TwoFrameHeteroscedasticDecompositionNetV21"
+  abbreviation: "TF-HDN-v2.1"
   input_interface:
     image_tensor_shape: "[B, 2, H, W]"
     additional_inputs:
@@ -147,7 +147,7 @@ model:
     normalization:
       outputs: ["B_1", "B_2"]
       positivity: "softplus plus epsilon"
-      implementation: "coarse latent grid followed by learned upsampling"
+      implementation: "fixed 8x8 latent grid followed by learned upsampling"
       restriction: "No full-resolution skip connections from the raw image encoders."
     flat_corona:
       outputs: ["C_1", "C_2"]
@@ -166,6 +166,7 @@ model:
         - "noise_tail_2"
       initial_distribution: "heteroscedastic Student-t"
       future_candidate: "conditional normalizing flow"
+      spatial_constraint: "fixed 8x8 latent grid, masked log-scale curvature loss, and fine-structure decorrelation from flat corona"
     cme:
       outputs: ["cme_probability_1", "cme_probability_2"]
       receives: ["common", "dynamic_1", "dynamic_2", "multiscale fused features"]
@@ -186,8 +187,8 @@ training:
   strategy: "self-supervised pretraining followed by transient-preservation and CME fine-tuning"
   self_supervision:
     corruption:
-      method: "random spatial patch masking and whole-frame dropout"
-      rule: "Masking is applied only during training and is never saved as an image product."
+      method: "cross-frame random spatial blind-spot masking and whole-target-frame dropout"
+      rule: "The target frame is hidden, matching source patches are blinded, and masking is never saved as an image product."
       modes:
         - "mask random patches in frame 1"
         - "mask random patches in frame 2"

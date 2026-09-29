@@ -88,7 +88,8 @@ def main() -> None:
             device_description += f" ({torch.cuda.get_device_name(components.device)})"
         if distributed.is_main:
             print(
-                f"model ready: parameters={parameter_count:,} device={device_description} "
+                f"model ready: name={config.model.name} parameters={parameter_count:,} "
+                f"device={device_description} "
                 f"mixed_precision={config.train.mixed_precision}",
                 flush=True,
             )
@@ -110,6 +111,7 @@ def main() -> None:
         images = sample["images"].unsqueeze(0).to(components.device)
         valid = sample["valid_mask"].unsqueeze(0).to(components.device)
         delta_t = sample["delta_t"].unsqueeze(0).to(components.device)
+        radius = sample["radial_coordinate"].unsqueeze(0).to(components.device)
         output = predict_pair(components.model, images, valid, delta_t)
         destination = arguments.output or f"artifacts/prediction_{arguments.pair_index:06d}.fits"
         Path(destination).parent.mkdir(parents=True, exist_ok=True)
@@ -120,6 +122,7 @@ def main() -> None:
             source_paths=sample["paths"],
             checkpoint=checkpoint,
             observed_images=images,
+            radial_coordinate=radius,
         )
         print(f"wrote {destination}")
     finally:

@@ -31,7 +31,7 @@ def read_fits_image(path: str | Path) -> tuple[np.ndarray, np.ndarray, np.ndarra
     center_x = float(header.get("CRPIX1", (width + 1.0) / 2.0)) - 1.0
     center_y = float(header.get("CRPIX2", (height + 1.0) / 2.0)) - 1.0
     y, x = np.indices(array.shape, dtype=np.float32)
-    radius = np.sqrt((x - center_x) ** 2 + (y - center_y) ** 2)
+    radius_pixels = np.sqrt((x - center_x) ** 2 + (y - center_y) ** 2)
     corners = np.asarray(
         (
             np.hypot(center_x, center_y),
@@ -41,7 +41,15 @@ def read_fits_image(path: str | Path) -> tuple[np.ndarray, np.ndarray, np.ndarra
         ),
         dtype=np.float32,
     )
-    radius /= max(float(corners.max()), 1.0)
+    farthest_corner = max(float(corners.max()), 1.0)
+    radius = radius_pixels / farthest_corner
+    # K-Cor's useful field is circular. Mask the geometric corners even when
+    # the FITS array stores small finite fill values there.
+    inscribed_radius = max(
+        min(center_x, width - 1 - center_x, center_y, height - 1 - center_y),
+        1.0,
+    )
+    valid &= radius_pixels <= inscribed_radius
     return np.where(valid, array, 0.0), valid, radius
 
 

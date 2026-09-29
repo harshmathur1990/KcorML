@@ -95,32 +95,32 @@ Install the additional ML dependencies separately:
 python -m pip install -r requirements-ml.txt
 ```
 
-The current model is the constrained TF-HDN v2. It uses fixed physical scaling,
+The current model is the constrained TF-HDN v2.1. It uses fixed physical scaling,
 log-domain decomposition with a unit-geometric-mean gauge, annular-mean
 flatness regularization on the learned clean latent, and alternating
 leave-one-frame-out Noise2Noise training. It never forms a difference image or
 uses NRGF as input or target.
 
-Build the leakage-safe pair manifest once, then run the five-epoch v2 gate:
+Build the leakage-safe pair manifest once, then run the five-epoch v2.1 gate:
 
 ```sh
 python pipeline.py --config configs/default.json --index
-python pipeline.py --config configs/v2_smoke.json --train
+python pipeline.py --config configs/v21_smoke.json --train
 ```
 
 For single-node multi-GPU training, `batch_size` is interpreted per GPU. For
 example, six processes with `batch_size: 5` use a global batch size of 30:
 
 ```sh
-torchrun --standalone --nproc_per_node=6 pipeline.py --config configs/v2_smoke.json --train
+torchrun --standalone --nproc_per_node=6 pipeline.py --config configs/v21_smoke.json --train
 ```
 
 Do not start the 100-epoch run unless the smoke checkpoint reports
-`checkpoint_eligible=True` and full-frame inspection confirms a non-constant
-normalization field. The v1 checkpoints are intentionally incompatible with
-v2 and remain reconstruction baselines only. After the gate passes, train with
-`configs/default.json`; v2 checkpoints are written under
-`artifacts/training_v2`.
+`checkpoint_eligible=True` and full-frame inspection confirms the separation.
+The v1 and v2 checkpoints are intentionally incompatible with v2.1 and remain
+reconstruction/prototype baselines only. After the gate passes, train with
+`configs/default.json`; v2.1 checkpoints are written under
+`artifacts/training_v21`.
 
 Only rank zero displays the progress bar and writes `best.pt` and `last.pt`.
 Each rank has its own DataLoader workers, so `num_workers: 1` creates six total
@@ -130,7 +130,7 @@ remain loadable by plain single-GPU inference.
 Evaluate or generate a multi-extension FITS product with a checkpoint:
 
 ```sh
-python pipeline.py --config configs/evaluate_full.json --evaluate --checkpoint artifacts/training_v2/best.pt
-python pipeline.py --config configs/evaluate_full.json --predict --checkpoint artifacts/training_v2/best.pt --pair-index 0
+python pipeline.py --config configs/evaluate_full.json --evaluate --checkpoint artifacts/training_v21/best.pt
+python pipeline.py --config configs/evaluate_full.json --predict --checkpoint artifacts/training_v21/best.pt --pair-index 0
 python diagnose_product.py artifacts/prediction_000000.fits
 ```

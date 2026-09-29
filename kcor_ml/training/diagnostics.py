@@ -43,10 +43,12 @@ def decomposition_diagnostics(
     saturation_fraction = saturation_count / selected_count.clamp_min(1)
 
     radial_log_std = log_flat.new_zeros(())
+    flat_radial_rms = log_flat.new_zeros(())
     if radial_coordinate is not None:
         bins_count = 32
         radius = radial_coordinate.to(device=log_flat.device, dtype=log_flat.dtype)
         sums = log_flat.new_zeros(bins_count)
+        flat_sums = log_flat.new_zeros(bins_count)
         counts = log_flat.new_zeros(bins_count)
         for batch in range(selected.shape[0]):
             for frame in range(selected.shape[1]):
@@ -56,11 +58,57 @@ def decomposition_diagnostics(
                 bins = (radius[batch, frame].reshape(-1)[frame_mask] * bins_count).long()
                 bins = bins.clamp(0, bins_count - 1)
                 samples = log_normalization[batch, frame].reshape(-1)[frame_mask]
+                flat_samples = log_flat[batch, frame].reshape(-1)[frame_mask]
                 sums = sums.scatter_add(0, bins, samples)
+                flat_sums = flat_sums.scatter_add(0, bins, flat_samples)
                 counts = counts.scatter_add(0, bins, torch.ones_like(samples))
         active_bins = counts > 0
         if active_bins.any():
             radial_log_std = (sums[active_bins] / counts[active_bins]).std(unbiased=False)
+            flat_annular_means = flat_sums[active_bins] / counts[active_bins]
+            flat_radial_rms = flat_annular_means.square().mean().sqrt()
+
+    structure_pairs: list[tuple[torch.Tensor, torch.Tensor]] = []
+    log_noise = output.noise_scale.float().clamp_min(1.0e-30).log()
+    for batch in range(selected.shape[0]):
+        for frame in range(selected.shape[1]):
+            valid = selected[batch, frame]
+            interior = (
+                valid[1:-1, 1:-1]
+                & valid[:-2, 1:-1]
+                & valid[2:, 1:-1]
+                & valid[1:-1, :-2]
+                & valid[1:-1, 2:]
+            )
+            if not interior.any():
+                continue
+            flat_frame = log_flat[batch, frame]
+            noise_frame = log_noise[batch, frame]
+            flat_laplacian = (
+                -4.0 * flat_frame[1:-1, 1:-1]
+                + flat_frame[:-2, 1:-1]
+                + flat_frame[2:, 1:-1]
+                + flat_frame[1:-1, :-2]
+                + flat_frame[1:-1, 2:]
+            )[interior]
+            noise_laplacian = (
+                -4.0 * noise_frame[1:-1, 1:-1]
+                + noise_frame[:-2, 1:-1]
+                + noise_frame[2:, 1:-1]
+                + noise_frame[1:-1, :-2]
+                + noise_frame[1:-1, 2:]
+            )[interior]
+            structure_pairs.append((flat_laplacian, noise_laplacian))
+    noise_structure_correlation = log_flat.new_zeros(())
+    if structure_pairs:
+        flat_structure = torch.cat([pair[0] for pair in structure_pairs])
+        noise_structure = torch.cat([pair[1] for pair in structure_pairs])
+        flat_structure = flat_structure - flat_structure.mean()
+        noise_structure = noise_structure - noise_structure.mean()
+        denominator = flat_structure.square().sum().sqrt() * noise_structure.square().sum().sqrt()
+        noise_structure_correlation = (
+            (flat_structure * noise_structure).sum() / denominator.clamp_min(1.0e-12)
+        ).abs()
 
     finite_tensors = (
         output.clean_pb,
@@ -73,6 +121,8 @@ def decomposition_diagnostics(
     return {
         "normalization_log_std": float(normalization_log_std.detach()),
         "normalization_radial_log_std": float(radial_log_std.detach()),
+        "flat_radial_rms": float(flat_radial_rms.detach()),
+        "noise_structure_correlation": float(noise_structure_correlation.detach()),
         "log_saturation_fraction": float(saturation_fraction.detach()),
         "outputs_finite": float(finite),
     }

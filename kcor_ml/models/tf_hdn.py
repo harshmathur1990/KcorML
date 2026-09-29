@@ -18,6 +18,7 @@ class TwoFrameHeteroscedasticDecompositionNet(nn.Module):
     def __init__(self, config: ModelConfig):
         super().__init__()
         config.validate()
+        self.architecture_name = config.name
         channels = config.channels
         self.minimum_noise_scale = config.minimum_noise_scale
         self.time_scale_seconds = config.time_scale_seconds
@@ -37,10 +38,15 @@ class TwoFrameHeteroscedasticDecompositionNet(nn.Module):
         )
         self.separator = LatentSeparator(channels[-1])
         self.normalization_decoder = NormalizationDecoder(
-            channels[-1], len(channels), config.group_norm_groups
+            channels[-1],
+            len(channels),
+            config.group_norm_groups,
+            config.normalization_grid_size,
         )
         self.flat_corona_decoder = FlatCoronaDecoder(channels, config.group_norm_groups)
-        self.noise_decoder = NoiseDecoder(channels[-1], len(channels), config.group_norm_groups)
+        self.noise_decoder = NoiseDecoder(
+            channels[-1], len(channels), config.group_norm_groups, config.noise_grid_size
+        )
         self.cme_decoder = CMEDecoder(channels, config.group_norm_groups)
 
     def forward(

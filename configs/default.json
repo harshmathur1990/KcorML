@@ -13,7 +13,7 @@
     "seed": 17
   },
   "model": {
-    "name": "tf_hdn_v2",
+    "name": "tf_hdn_v21",
     "channels": [32, 64, 128, 256],
     "blocks_per_level": 2,
     "group_norm_groups": 8,
@@ -22,14 +22,18 @@
     "minimum_noise_scale": 1e-10,
     "positional_grid_size": 32,
     "time_scale_seconds": 15.0,
-    "log_component_limit": 12.0
+    "log_component_limit": 12.0,
+    "normalization_grid_size": 8,
+    "noise_grid_size": 8
   },
   "loss": {
     "observation_weight": 1.0,
-    "normalization_bandwidth_weight": 0.001,
+    "normalization_bandwidth_weight": 0.1,
     "noise_independence_weight": 0.001,
     "common_consistency_weight": 0.01,
-    "radial_flatness_weight": 0.05,
+    "radial_flatness_weight": 2.0,
+    "noise_smoothness_weight": 0.05,
+    "noise_structure_weight": 0.05,
     "gauge_weight": 0.01,
     "radial_bins": 32,
     "cme_weight": 0.0
@@ -45,11 +49,13 @@
     "mask_patch_size": 8,
     "frame_drop_probability": 0.05,
     "device": "cuda",
-    "output_dir": "artifacts/training_v2",
+    "output_dir": "artifacts/training_v21",
     "resume_checkpoint": null,
     "log_every_steps": 25,
     "progress_bar": true,
     "minimum_normalization_log_std": 0.001,
-    "maximum_log_saturation_fraction": 0.001
+    "maximum_log_saturation_fraction": 0.001,
+    "maximum_flat_radial_rms": 0.02,
+    "maximum_noise_structure_correlation": 0.5
   }
 }

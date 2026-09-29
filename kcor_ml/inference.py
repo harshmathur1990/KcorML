@@ -67,6 +67,7 @@ def write_fits_product(
     source_paths: tuple[str, str],
     checkpoint: str,
     observed_images: torch.Tensor | None = None,
+    radial_coordinate: torch.Tensor | None = None,
     overwrite: bool = False,
 ) -> None:
     try:
@@ -75,7 +76,7 @@ def write_fits_product(
         raise RuntimeError("FITS output requires astropy; install requirements-ml.txt") from exc
 
     primary = fits.PrimaryHDU()
-    primary.header["MODEL"] = "TF-HDN-V2"
+    primary.header["MODEL"] = "TF-HDN-V21"
     primary.header["CKPT"] = Path(checkpoint).name
     primary.header["SOURCE1"] = Path(source_paths[0]).name
     primary.header["SOURCE2"] = Path(source_paths[1]).name
@@ -98,5 +99,8 @@ def write_fits_product(
             "OBSERVED_PB_2": _image(observed_images, 1),
             **arrays,
         }
+    if radial_coordinate is not None:
+        arrays["RADIAL_COORD_1"] = _image(radial_coordinate, 0)
+        arrays["RADIAL_COORD_2"] = _image(radial_coordinate, 1)
     hdus = [primary] + [fits.ImageHDU(array, name=name) for name, array in arrays.items()]
     fits.HDUList(hdus).writeto(path, overwrite=overwrite, checksum=True)

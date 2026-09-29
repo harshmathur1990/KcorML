@@ -55,13 +55,15 @@ class CoarseDecoder(nn.Module):
 
 
 class NormalizationDecoder(nn.Module):
-    def __init__(self, channels: int, levels: int, groups: int):
+    def __init__(self, channels: int, levels: int, groups: int, grid_size: int):
         super().__init__()
+        self.grid_size = grid_size
         self.decoder = CoarseDecoder(channels, levels, groups, 1)
 
     def forward(self, common: torch.Tensor, output_size: tuple[int, int]) -> torch.Tensor:
         # This is log(B), not B. Positivity is imposed after the gauge is fixed.
-        shared = self.decoder(common, output_size)
+        coarse = F.adaptive_avg_pool2d(common, (self.grid_size, self.grid_size))
+        shared = self.decoder(coarse, output_size)
         return shared.expand(-1, 2, -1, -1)
 
 
@@ -76,14 +78,16 @@ class FlatCoronaDecoder(nn.Module):
 
 
 class NoiseDecoder(nn.Module):
-    def __init__(self, channels: int, levels: int, groups: int):
+    def __init__(self, channels: int, levels: int, groups: int, grid_size: int):
         super().__init__()
+        self.grid_size = grid_size
         self.decoder = CoarseDecoder(channels, levels, groups, 2)
 
     def forward(
         self, noise_latent: torch.Tensor, output_size: tuple[int, int]
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        raw_scale, raw_df = self.decoder(noise_latent, output_size).chunk(2, dim=1)
+        coarse = F.adaptive_avg_pool2d(noise_latent, (self.grid_size, self.grid_size))
+        raw_scale, raw_df = self.decoder(coarse, output_size).chunk(2, dim=1)
         return F.softplus(raw_scale), F.softplus(raw_df) + 2.0
 
 

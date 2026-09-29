@@ -51,7 +51,15 @@ def load_checkpoint(
     map_location: str | torch.device = "cpu",
 ) -> dict[str, Any]:
     checkpoint = torch.load(path, map_location=map_location, weights_only=False)
-    unwrap_model(model).load_state_dict(checkpoint["model_state"])
+    bare_model = unwrap_model(model)
+    checkpoint_model = checkpoint.get("config", {}).get("model", {}).get("name")
+    expected_model = getattr(bare_model, "architecture_name", None)
+    if checkpoint_model and expected_model and checkpoint_model != expected_model:
+        raise ValueError(
+            f"checkpoint architecture {checkpoint_model!r} is incompatible with "
+            f"configured architecture {expected_model!r}"
+        )
+    bare_model.load_state_dict(checkpoint["model_state"])
     if optimizer is not None and "optimizer_state" in checkpoint:
         optimizer.load_state_dict(checkpoint["optimizer_state"])
     if scheduler is not None and "scheduler_state" in checkpoint:

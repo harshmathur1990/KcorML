@@ -44,7 +44,7 @@ class DataConfig:
 
 @dataclass(slots=True)
 class ModelConfig:
-    name: str = "tf_hdn_v2"
+    name: str = "tf_hdn_v21"
     channels: tuple[int, ...] = (32, 64, 128, 256)
     blocks_per_level: int = 2
     group_norm_groups: int = 8
@@ -54,9 +54,11 @@ class ModelConfig:
     positional_grid_size: int = 32
     time_scale_seconds: float = 15.0
     log_component_limit: float = 12.0
+    normalization_grid_size: int = 8
+    noise_grid_size: int = 8
 
     def validate(self) -> None:
-        if self.name != "tf_hdn_v2":
+        if self.name != "tf_hdn_v21":
             raise ValueError(f"unsupported model: {self.name}")
         if len(self.channels) < 2 or any(value < 1 for value in self.channels):
             raise ValueError("channels must contain at least two positive values")
@@ -66,15 +68,19 @@ class ModelConfig:
             raise ValueError("physical scales must be positive")
         if self.log_component_limit <= 0:
             raise ValueError("log_component_limit must be positive")
+        if self.normalization_grid_size < 2 or self.noise_grid_size < 2:
+            raise ValueError("coarse decoder grid sizes must be at least two")
 
 
 @dataclass(slots=True)
 class LossConfig:
     observation_weight: float = 1.0
-    normalization_bandwidth_weight: float = 1.0e-3
+    normalization_bandwidth_weight: float = 1.0e-1
     noise_independence_weight: float = 1.0e-3
     common_consistency_weight: float = 1.0e-2
-    radial_flatness_weight: float = 5.0e-2
+    radial_flatness_weight: float = 2.0
+    noise_smoothness_weight: float = 5.0e-2
+    noise_structure_weight: float = 5.0e-2
     gauge_weight: float = 1.0e-2
     radial_bins: int = 32
     cme_weight: float = 0.0
@@ -86,6 +92,8 @@ class LossConfig:
             self.noise_independence_weight,
             self.common_consistency_weight,
             self.radial_flatness_weight,
+            self.noise_smoothness_weight,
+            self.noise_structure_weight,
             self.gauge_weight,
             self.cme_weight,
         )
@@ -113,6 +121,8 @@ class TrainConfig:
     progress_bar: bool = True
     minimum_normalization_log_std: float = 1.0e-3
     maximum_log_saturation_fraction: float = 1.0e-3
+    maximum_flat_radial_rms: float = 2.0e-2
+    maximum_noise_structure_correlation: float = 0.5
 
     def validate(self) -> None:
         if self.epochs < 1 or self.learning_rate <= 0:
@@ -129,6 +139,10 @@ class TrainConfig:
             raise ValueError("minimum_normalization_log_std must be non-negative")
         if not 0 <= self.maximum_log_saturation_fraction <= 1:
             raise ValueError("maximum_log_saturation_fraction must be in [0, 1]")
+        if self.maximum_flat_radial_rms < 0:
+            raise ValueError("maximum_flat_radial_rms must be non-negative")
+        if not 0 <= self.maximum_noise_structure_correlation <= 1:
+            raise ValueError("maximum_noise_structure_correlation must be in [0, 1]")
 
 
 @dataclass(slots=True)
