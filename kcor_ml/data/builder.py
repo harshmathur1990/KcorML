@@ -17,6 +17,7 @@ class LoaderBundle:
     train: DataLoader
     validation: DataLoader
     test: DataLoader
+    full_diagnostic: DataLoader
 
 
 class DataBuilder:
@@ -34,7 +35,9 @@ class DataBuilder:
             training=split == "train",
         )
 
-    def build_loader(self, dataset: KCorPairDataset, *, shuffle: bool) -> DataLoader:
+    def build_loader(
+        self, dataset: KCorPairDataset, *, shuffle: bool, batch_size: int | None = None
+    ) -> DataLoader:
         sampler = None
         if self.world_size > 1:
             sampler = DistributedSampler(
@@ -47,7 +50,7 @@ class DataBuilder:
             )
         return DataLoader(
             dataset,
-            batch_size=self.config.batch_size,
+            batch_size=batch_size or self.config.batch_size,
             shuffle=shuffle and sampler is None,
             sampler=sampler,
             num_workers=self.config.num_workers,
@@ -56,8 +59,17 @@ class DataBuilder:
         )
 
     def build(self, manifest: PairManifest) -> LoaderBundle:
+        diagnostic_pairs = manifest.splits["validation"][: self.config.full_diagnostic_samples]
+        diagnostic_dataset = KCorPairDataset(
+            diagnostic_pairs,
+            crop_size=None,
+            training=False,
+        )
         return LoaderBundle(
             train=self.build_loader(self.build_dataset(manifest, "train"), shuffle=True),
             validation=self.build_loader(self.build_dataset(manifest, "validation"), shuffle=False),
             test=self.build_loader(self.build_dataset(manifest, "test"), shuffle=False),
+            full_diagnostic=self.build_loader(
+                diagnostic_dataset, shuffle=False, batch_size=1
+            ),
         )

@@ -54,14 +54,26 @@ class TwoFrameHeteroscedasticDecompositionNet(nn.Module):
         images: torch.Tensor,
         delta_t: torch.Tensor | None = None,
         valid_mask: torch.Tensor | None = None,
+        radial_coordinate: torch.Tensor | None = None,
     ) -> TFHDNOutput:
         if images.ndim != 4 or images.shape[1] != 2:
             raise ValueError("images must have shape [B, 2, H, W]")
         if valid_mask is not None:
             images = images.masked_fill(~valid_mask.bool(), 0.0)
+        if radial_coordinate is None:
+            height, width = images.shape[-2:]
+            y = torch.linspace(-1.0, 1.0, height, device=images.device, dtype=images.dtype)
+            x = torch.linspace(-1.0, 1.0, width, device=images.device, dtype=images.dtype)
+            grid_y, grid_x = torch.meshgrid(y, x, indexing="ij")
+            radius = (grid_x.square() + grid_y.square()).sqrt()
+            radius = radius / radius.max().clamp_min(1.0)
+            radial_coordinate = radius.expand(images.shape[0], 2, -1, -1)
+        if radial_coordinate.shape != images.shape:
+            raise ValueError("radial_coordinate must have shape [B, 2, H, W]")
+        radial_coordinate = radial_coordinate.to(device=images.device, dtype=images.dtype)
         scaled = self.scaler(images)
-        first = self.encoder(scaled[:, 0:1])
-        second = self.encoder(scaled[:, 1:2])
+        first = self.encoder(scaled[:, 0:1], radial_coordinate[:, 0:1])
+        second = self.encoder(scaled[:, 1:2], radial_coordinate[:, 1:2])
         if delta_t is None:
             delta_t = images.new_zeros(images.shape[0])
         time = self.time_embedding(delta_t.reshape(-1, 1) / self.time_scale_seconds)

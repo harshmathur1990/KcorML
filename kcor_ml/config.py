@@ -26,6 +26,7 @@ class DataConfig:
     train_fraction: float = 0.8
     validation_fraction: float = 0.1
     seed: int = 17
+    full_diagnostic_samples: int = 12
 
     def validate(self) -> None:
         if self.max_delta_seconds <= 0:
@@ -34,6 +35,8 @@ class DataConfig:
             raise ValueError("crop_size must be at least 32 or null")
         if self.batch_size < 1 or self.num_workers < 0:
             raise ValueError("invalid loader configuration")
+        if self.full_diagnostic_samples < 1:
+            raise ValueError("full_diagnostic_samples must be positive")
         if not 0 < self.train_fraction < 1:
             raise ValueError("train_fraction must be between zero and one")
         if not 0 <= self.validation_fraction < 1:
@@ -44,7 +47,7 @@ class DataConfig:
 
 @dataclass(slots=True)
 class ModelConfig:
-    name: str = "tf_hdn_v21"
+    name: str = "tf_hdn_v22"
     channels: tuple[int, ...] = (32, 64, 128, 256)
     blocks_per_level: int = 2
     group_norm_groups: int = 8
@@ -53,12 +56,12 @@ class ModelConfig:
     minimum_noise_scale: float = 1.0e-10
     positional_grid_size: int = 32
     time_scale_seconds: float = 15.0
-    log_component_limit: float = 12.0
+    log_component_limit: float = 18.0
     normalization_grid_size: int = 8
     noise_grid_size: int = 8
 
     def validate(self) -> None:
-        if self.name != "tf_hdn_v21":
+        if self.name != "tf_hdn_v22":
             raise ValueError(f"unsupported model: {self.name}")
         if len(self.channels) < 2 or any(value < 1 for value in self.channels):
             raise ValueError("channels must contain at least two positive values")

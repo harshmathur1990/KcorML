@@ -108,13 +108,14 @@ data_contract:
       - "available quality conditions"
 
 model:
-  name: "TwoFrameHeteroscedasticDecompositionNetV21"
-  abbreviation: "TF-HDN-v2.1"
+  name: "TwoFrameHeteroscedasticDecompositionNetV22"
+  abbreviation: "TF-HDN-v2.2"
   input_interface:
     image_tensor_shape: "[B, 2, H, W]"
     additional_inputs:
       - "delta_t_seconds"
       - "valid_mask"
+      - "absolute normalized solar-radius coordinate from FITS CRPIX geometry"
       - "selected metadata embeddings"
     position_encoding: "learned two-dimensional positional embeddings"
     scaling: "fixed physical pB scale; it is not trainable and cannot participate in scale collapse"
@@ -255,7 +256,7 @@ training:
       definition: "The valid-pixel geometric mean of each C_i is one, with the removed log-amplitude transferred to B_i so B_i*C_i is unchanged."
       purpose: "Remove the multiplicative scale ambiguity that collapsed the v1 normalization field."
     radial_flatness:
-      definition: "Penalize annular means of log(C_i) using FITS solar-center geometry."
+      definition: "Penalize annular means of the radial derivative of log(C_i) using FITS solar-center geometry."
       purpose: "Move the broad radial trend into B_i while preserving angular structure; never divide by annular variance."
     cross_frame_noise2noise:
       definition: "Alternate frame 1 -> frame 2 and frame 2 -> frame 1 prediction without forming an image difference."

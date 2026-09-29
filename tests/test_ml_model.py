@@ -39,6 +39,11 @@ class TFHDNTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.model(torch.randn(1, 1, 64, 64))
 
+    def test_invalid_radial_coordinate_shape_fails(self):
+        images = torch.randn(1, 2, 64, 64) * 1.0e-8
+        with self.assertRaises(ValueError):
+            self.model(images, radial_coordinate=torch.zeros(1, 1, 64, 64))
+
     def test_swapping_frames_swaps_frame_outputs(self):
         self.model.eval()
         images = torch.randn(1, 2, 64, 64) * 1.0e-8

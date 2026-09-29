@@ -67,6 +67,7 @@ def diagnose_product(
     minimum_log_std: float = 1.0e-3,
     maximum_flat_radial_rms: float = 2.0e-2,
     maximum_noise_structure_correlation: float = 0.5,
+    maximum_log_saturation_fraction: float = 1.0e-3,
 ) -> dict[str, object]:
     try:
         from astropy.io import fits
@@ -75,6 +76,8 @@ def diagnose_product(
 
     frames: list[dict[str, float | bool]] = []
     with fits.open(path, memmap=True) as hdus:
+        input_scale = hdus[0].header.get("INPSCALE")
+        log_limit = hdus[0].header.get("LOGLIMIT")
         valid = np.asarray(hdus["VALID_MASK"].data, dtype=bool)
         for frame in (1, 2):
             normalization = np.asarray(hdus[f"NORM_FIELD_{frame}"].data, dtype=np.float64)
@@ -102,6 +105,15 @@ def diagnose_product(
             noise_structure_correlation = _structure_correlation(
                 log_flat_image, log_noise_image, positive
             )
+            saturation_fraction = 0.0
+            if input_scale is not None and log_limit is not None:
+                log_normalization_scaled = np.log(
+                    np.clip(normalization[positive] / float(input_scale), 1.0e-30, None)
+                )
+                saturated = (
+                    np.abs(log_normalization_scaled) >= float(log_limit) - 1.0e-4
+                ) | (np.abs(log_flat) >= float(log_limit) - 1.0e-4)
+                saturation_fraction = float(saturated.mean())
             frames.append(
                 {
                     "frame": frame,
@@ -114,6 +126,7 @@ def diagnose_product(
                     "flat_radial_rms": flat_radial_rms,
                     "noise_median": float(np.median(noise[positive])),
                     "noise_structure_correlation": noise_structure_correlation,
+                    "log_saturation_fraction": saturation_fraction,
                 }
             )
 
@@ -123,6 +136,8 @@ def diagnose_product(
         and frame.get("flat_radial_rms", float("inf")) <= maximum_flat_radial_rms
         and frame.get("noise_structure_correlation", float("inf"))
         <= maximum_noise_structure_correlation
+        and frame.get("log_saturation_fraction", float("inf"))
+        <= maximum_log_saturation_fraction
         for frame in frames
     )
     return {"path": str(path), "eligible": eligible, "frames": frames}

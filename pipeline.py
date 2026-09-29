@@ -94,7 +94,9 @@ def main() -> None:
                 flush=True,
             )
         if arguments.train:
-            Trainer(config, components).fit(loaders.train, loaders.validation)
+            Trainer(config, components).fit(
+                loaders.train, loaders.validation, loaders.full_diagnostic
+            )
             return
         checkpoint = require_checkpoint(arguments)
         load_checkpoint(checkpoint, model=components.model, map_location=components.device)
@@ -112,7 +114,7 @@ def main() -> None:
         valid = sample["valid_mask"].unsqueeze(0).to(components.device)
         delta_t = sample["delta_t"].unsqueeze(0).to(components.device)
         radius = sample["radial_coordinate"].unsqueeze(0).to(components.device)
-        output = predict_pair(components.model, images, valid, delta_t)
+        output = predict_pair(components.model, images, valid, delta_t, radius)
         destination = arguments.output or f"artifacts/prediction_{arguments.pair_index:06d}.fits"
         Path(destination).parent.mkdir(parents=True, exist_ok=True)
         write_fits_product(
@@ -123,6 +125,8 @@ def main() -> None:
             checkpoint=checkpoint,
             observed_images=images,
             radial_coordinate=radius,
+            input_scale=config.model.input_scale,
+            log_component_limit=config.model.log_component_limit,
         )
         print(f"wrote {destination}")
     finally:

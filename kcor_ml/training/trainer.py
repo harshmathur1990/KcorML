@@ -106,11 +106,12 @@ class Trainer:
         *,
         training: bool,
         epoch: int | None = None,
+        phase_name: str | None = None,
     ) -> dict[str, float]:
         model = self.components.model
         model.train(training)
         metrics = MeanMetrics()
-        phase = "train" if training else "validation"
+        phase = phase_name or ("train" if training else "validation")
         total_steps = len(loader) if hasattr(loader, "__len__") else None
         epoch_label = f" epoch {epoch}/{self.config.train.epochs}" if epoch is not None else ""
         progress = tqdm(
@@ -143,7 +144,12 @@ class Trainer:
                     if training:
                         self.components.optimizer.zero_grad(set_to_none=True)
                     with self._autocast():
-                        output = model(cross_input, delta_t=delta_t, valid_mask=valid)
+                        output = model(
+                            cross_input,
+                            delta_t=delta_t,
+                            valid_mask=valid,
+                            radial_coordinate=radius,
+                        )
                         breakdown = self.components.loss(
                             output,
                             target,
@@ -185,7 +191,7 @@ class Trainer:
         metrics.synchronize(self.components.device)
         return metrics.compute()
 
-    def fit(self, train_loader, validation_loader) -> dict[str, float]:
+    def fit(self, train_loader, validation_loader, full_diagnostic_loader) -> dict[str, float]:
         start_epoch = 0
         best = float("inf")
         if self.config.train.resume_checkpoint:
@@ -209,20 +215,26 @@ class Trainer:
             validation_metrics = self.run_epoch(
                 validation_loader, training=False, epoch=epoch_number
             )
+            full_diagnostic_metrics = self.run_epoch(
+                full_diagnostic_loader,
+                training=False,
+                epoch=epoch_number,
+                phase_name="full diagnostic",
+            )
             self.components.scheduler.step()
             last_validation = validation_metrics
             validation_loss = validation_metrics["total"]
             if self.components.distributed.is_main:
                 checkpoint_eligible = (
                     torch.isfinite(torch.tensor(validation_loss)).item()
-                    and validation_metrics["outputs_finite"] == 1.0
-                    and validation_metrics["normalization_radial_log_std"]
+                    and full_diagnostic_metrics["outputs_finite"] == 1.0
+                    and full_diagnostic_metrics["normalization_radial_log_std"]
                     >= self.config.train.minimum_normalization_log_std
-                    and validation_metrics["log_saturation_fraction"]
+                    and full_diagnostic_metrics["log_saturation_fraction"]
                     <= self.config.train.maximum_log_saturation_fraction
-                    and validation_metrics["flat_radial_rms"]
+                    and full_diagnostic_metrics["flat_radial_rms"]
                     <= self.config.train.maximum_flat_radial_rms
-                    and validation_metrics["noise_structure_correlation"]
+                    and full_diagnostic_metrics["noise_structure_correlation"]
                     <= self.config.train.maximum_noise_structure_correlation
                 )
                 improved = checkpoint_eligible and validation_loss < best
@@ -235,7 +247,13 @@ class Trainer:
                     epoch=epoch,
                     best_validation_loss=best,
                     config=self.config.to_dict(),
-                    diagnostics=validation_metrics,
+                    diagnostics={
+                        **validation_metrics,
+                        **{
+                            f"full_{name}": value
+                            for name, value in full_diagnostic_metrics.items()
+                        },
+                    },
                 )
                 save_checkpoint(self.output_dir / "last.pt", **checkpoint_arguments)
                 if improved:
@@ -243,10 +261,10 @@ class Trainer:
                 print(
                     f"epoch={epoch_number} train={train_metrics['total']:.6g} "
                     f"validation={validation_loss:.6g} "
-                    f"norm_radial_std={validation_metrics['normalization_radial_log_std']:.4g} "
-                    f"flat_radial_rms={validation_metrics['flat_radial_rms']:.4g} "
-                    f"noise_corr={validation_metrics['noise_structure_correlation']:.3g} "
-                    f"saturation={validation_metrics['log_saturation_fraction']:.3g} "
+                    f"full_norm_radial_std={full_diagnostic_metrics['normalization_radial_log_std']:.4g} "
+                    f"full_flat_radial_rms={full_diagnostic_metrics['flat_radial_rms']:.4g} "
+                    f"full_noise_corr={full_diagnostic_metrics['noise_structure_correlation']:.3g} "
+                    f"full_saturation={full_diagnostic_metrics['log_saturation_fraction']:.3g} "
                     f"checkpoint_eligible={checkpoint_eligible}",
                     flush=True,
                 )

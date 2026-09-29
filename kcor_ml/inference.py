@@ -15,6 +15,7 @@ def predict_pair(
     images: torch.Tensor,
     valid_mask: torch.Tensor,
     delta_t: torch.Tensor,
+    radial_coordinate: torch.Tensor,
 ) -> TFHDNOutput:
     model.eval()
     with torch.inference_mode():
@@ -29,7 +30,12 @@ def predict_pair(
         )
         from_first = images.clone()
         from_first[:, 1] = 0.0
-        predicted_second = model(from_first, valid_mask=valid_mask, delta_t=delta_t)
+        predicted_second = model(
+            from_first,
+            valid_mask=valid_mask,
+            delta_t=delta_t,
+            radial_coordinate=radial_coordinate,
+        )
         second_channels = {
             name: getattr(predicted_second, name)[:, 1:2].clone() for name in names
         }
@@ -37,7 +43,12 @@ def predict_pair(
 
         from_second = images.clone()
         from_second[:, 0] = 0.0
-        predicted_first = model(from_second, valid_mask=valid_mask, delta_t=delta_t)
+        predicted_first = model(
+            from_second,
+            valid_mask=valid_mask,
+            delta_t=delta_t,
+            radial_coordinate=radial_coordinate,
+        )
 
         def combine(name: str) -> torch.Tensor:
             first = getattr(predicted_first, name)[:, 0:1]
@@ -68,6 +79,8 @@ def write_fits_product(
     checkpoint: str,
     observed_images: torch.Tensor | None = None,
     radial_coordinate: torch.Tensor | None = None,
+    input_scale: float | None = None,
+    log_component_limit: float | None = None,
     overwrite: bool = False,
 ) -> None:
     try:
@@ -76,10 +89,14 @@ def write_fits_product(
         raise RuntimeError("FITS output requires astropy; install requirements-ml.txt") from exc
 
     primary = fits.PrimaryHDU()
-    primary.header["MODEL"] = "TF-HDN-V21"
+    primary.header["MODEL"] = "TF-HDN-V22"
     primary.header["CKPT"] = Path(checkpoint).name
     primary.header["SOURCE1"] = Path(source_paths[0]).name
     primary.header["SOURCE2"] = Path(source_paths[1]).name
+    if input_scale is not None:
+        primary.header["INPSCALE"] = input_scale
+    if log_component_limit is not None:
+        primary.header["LOGLIMIT"] = log_component_limit
     arrays = {
         "CLEAN_PB_1": _image(output.clean_pb, 0),
         "CLEAN_PB_2": _image(output.clean_pb, 1),

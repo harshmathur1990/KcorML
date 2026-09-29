@@ -63,11 +63,11 @@ def radial_flatness_loss(
     radial_bins: int,
     radial_coordinate: torch.Tensor | None = None,
 ) -> torch.Tensor:
-    """Remove only annular mean trends from the learned clean corona.
+    """Penalize annular mean radial derivatives of the learned clean corona.
 
-    No radial statistic from the noisy input is divided into an image.  This is
-    a training constraint on log(C), and does not normalize by annular variance
-    as NRGF does.
+    Derivatives eliminate the crop-dependent additive log gauge. No radial
+    statistic from the noisy input is divided into an image, and no annular
+    variance normalization is performed.
     """
     values = log_flat_corona.float()
     selected = mask.bool()
@@ -84,25 +84,43 @@ def radial_flatness_loss(
         if radial_coordinate.shape != values.shape:
             raise ValueError("radial_coordinate must match log_flat_corona shape")
 
-    sums = values.new_zeros(radial_bins)
+    derivative_sums = values.new_zeros(radial_bins)
     counts = values.new_zeros(radial_bins)
     for batch in range(values.shape[0]):
         for frame in range(values.shape[1]):
-            frame_mask = selected[batch, frame].reshape(-1)
-            if not frame_mask.any():
+            valid = selected[batch, frame]
+            interior = (
+                valid[1:-1, 1:-1]
+                & valid[:-2, 1:-1]
+                & valid[2:, 1:-1]
+                & valid[1:-1, :-2]
+                & valid[1:-1, 2:]
+            )
+            if not interior.any():
                 continue
-            frame_values = values[batch, frame].reshape(-1)
-            frame_radius = radial_coordinate[batch, frame].reshape(-1)
-            bins = (frame_radius[frame_mask] * radial_bins).long().clamp(0, radial_bins - 1)
-            sums = sums.scatter_add(0, bins, frame_values[frame_mask])
+            frame_values = values[batch, frame]
+            frame_radius = radial_coordinate[batch, frame]
+            value_dx = 0.5 * (frame_values[1:-1, 2:] - frame_values[1:-1, :-2])
+            value_dy = 0.5 * (frame_values[2:, 1:-1] - frame_values[:-2, 1:-1])
+            radius_dx = 0.5 * (frame_radius[1:-1, 2:] - frame_radius[1:-1, :-2])
+            radius_dy = 0.5 * (frame_radius[2:, 1:-1] - frame_radius[:-2, 1:-1])
+            radius_gradient = (radius_dx.square() + radius_dy.square()).sqrt()
+            radial_derivative = (
+                value_dx * radius_dx + value_dy * radius_dy
+            ) / radius_gradient.clamp_min(1.0e-8)
+            bins = (
+                frame_radius[1:-1, 1:-1][interior] * radial_bins
+            ).long().clamp(0, radial_bins - 1)
+            samples = radial_derivative[interior]
+            derivative_sums = derivative_sums.scatter_add(0, bins, samples)
             counts = counts.scatter_add(
-                0, bins, torch.ones_like(frame_values[frame_mask])
+                0, bins, torch.ones_like(samples)
             )
     active = counts > 0
     if not active.any():
         return values.new_zeros(())
-    annular_means = sums[active] / counts[active]
-    return annular_means.square().mean()
+    annular_radial_derivatives = derivative_sums[active] / counts[active]
+    return annular_radial_derivatives.square().mean()
 
 
 def noise_structure_correlation_loss(
