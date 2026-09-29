@@ -35,6 +35,26 @@ class SeparationLossTests(unittest.TestCase):
         self.assertGreater(float(copied), 0.99)
         self.assertEqual(float(smooth), 0.0)
 
+    def test_radial_derivative_loss_is_resolution_invariant(self):
+        from kcor_ml.losses.separation import radial_flatness_loss
+
+        def loss_at(size):
+            axis = torch.linspace(-1.0, 1.0, size)
+            y, x = torch.meshgrid(axis, axis, indexing="ij")
+            radius = (x.square() + y.square()).sqrt()
+            radius = radius / radius.max()
+            values = (2.0 * radius).expand(1, 2, -1, -1)
+            coordinates = radius.expand_as(values)
+            mask = ((radius > 0.1) & (radius < 0.9)).expand_as(values)
+            return radial_flatness_loss(values, mask, 16, coordinates)
+
+        low_resolution = loss_at(64)
+        high_resolution = loss_at(128)
+        self.assertTrue(
+            torch.allclose(low_resolution, high_resolution, rtol=0.03, atol=0.03),
+            (float(low_resolution), float(high_resolution)),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -62,6 +62,7 @@ def radial_flatness_loss(
     mask: torch.Tensor,
     radial_bins: int,
     radial_coordinate: torch.Tensor | None = None,
+    huber_beta: float = 0.1,
 ) -> torch.Tensor:
     """Penalize annular mean radial derivatives of the learned clean corona.
 
@@ -104,10 +105,10 @@ def radial_flatness_loss(
             value_dy = 0.5 * (frame_values[2:, 1:-1] - frame_values[:-2, 1:-1])
             radius_dx = 0.5 * (frame_radius[1:-1, 2:] - frame_radius[1:-1, :-2])
             radius_dy = 0.5 * (frame_radius[2:, 1:-1] - frame_radius[:-2, 1:-1])
-            radius_gradient = (radius_dx.square() + radius_dy.square()).sqrt()
+            radius_gradient_squared = radius_dx.square() + radius_dy.square()
             radial_derivative = (
                 value_dx * radius_dx + value_dy * radius_dy
-            ) / radius_gradient.clamp_min(1.0e-8)
+            ) / radius_gradient_squared.clamp_min(1.0e-12)
             bins = (
                 frame_radius[1:-1, 1:-1][interior] * radial_bins
             ).long().clamp(0, radial_bins - 1)
@@ -120,7 +121,11 @@ def radial_flatness_loss(
     if not active.any():
         return values.new_zeros(())
     annular_radial_derivatives = derivative_sums[active] / counts[active]
-    return annular_radial_derivatives.square().mean()
+    return F.smooth_l1_loss(
+        annular_radial_derivatives,
+        torch.zeros_like(annular_radial_derivatives),
+        beta=huber_beta,
+    )
 
 
 def noise_structure_correlation_loss(

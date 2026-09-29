@@ -14,7 +14,7 @@
     "full_diagnostic_samples": 12
   },
   "model": {
-    "name": "tf_hdn_v22",
+    "name": "tf_hdn_v23",
     "channels": [32, 64, 128, 256],
     "blocks_per_level": 2,
     "group_norm_groups": 8,
@@ -37,6 +37,7 @@
     "noise_structure_weight": 0.05,
     "gauge_weight": 0.01,
     "radial_bins": 32,
+    "radial_derivative_huber_beta": 0.1,
     "cme_weight": 0.0
   },
   "train": {
@@ -50,7 +51,7 @@
     "mask_patch_size": 8,
     "frame_drop_probability": 0.0,
     "device": "cuda",
-    "output_dir": "artifacts/training_v22",
+    "output_dir": "artifacts/training_v23",
     "resume_checkpoint": null,
     "log_every_steps": 25,
     "progress_bar": true,

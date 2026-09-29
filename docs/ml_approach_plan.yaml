@@ -108,8 +108,8 @@ data_contract:
       - "available quality conditions"
 
 model:
-  name: "TwoFrameHeteroscedasticDecompositionNetV22"
-  abbreviation: "TF-HDN-v2.2"
+  name: "TwoFrameHeteroscedasticDecompositionNetV23"
+  abbreviation: "TF-HDN-v2.3"
   input_interface:
     image_tensor_shape: "[B, 2, H, W]"
     additional_inputs:

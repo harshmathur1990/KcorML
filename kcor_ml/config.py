@@ -47,7 +47,7 @@ class DataConfig:
 
 @dataclass(slots=True)
 class ModelConfig:
-    name: str = "tf_hdn_v22"
+    name: str = "tf_hdn_v23"
     channels: tuple[int, ...] = (32, 64, 128, 256)
     blocks_per_level: int = 2
     group_norm_groups: int = 8
@@ -61,7 +61,7 @@ class ModelConfig:
     noise_grid_size: int = 8
 
     def validate(self) -> None:
-        if self.name != "tf_hdn_v22":
+        if self.name != "tf_hdn_v23":
             raise ValueError(f"unsupported model: {self.name}")
         if len(self.channels) < 2 or any(value < 1 for value in self.channels):
             raise ValueError("channels must contain at least two positive values")
@@ -86,6 +86,7 @@ class LossConfig:
     noise_structure_weight: float = 5.0e-2
     gauge_weight: float = 1.0e-2
     radial_bins: int = 32
+    radial_derivative_huber_beta: float = 0.1
     cme_weight: float = 0.0
 
     def validate(self) -> None:
@@ -104,6 +105,8 @@ class LossConfig:
             raise ValueError("loss weights must be non-negative")
         if self.radial_bins < 4:
             raise ValueError("radial_bins must be at least four")
+        if self.radial_derivative_huber_beta <= 0:
+            raise ValueError("radial_derivative_huber_beta must be positive")
 
 
 @dataclass(slots=True)

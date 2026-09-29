@@ -89,7 +89,7 @@ def write_fits_product(
         raise RuntimeError("FITS output requires astropy; install requirements-ml.txt") from exc
 
     primary = fits.PrimaryHDU()
-    primary.header["MODEL"] = "TF-HDN-V22"
+    primary.header["MODEL"] = "TF-HDN-V23"
     primary.header["CKPT"] = Path(checkpoint).name
     primary.header["SOURCE1"] = Path(source_paths[0]).name
     primary.header["SOURCE2"] = Path(source_paths[1]).name

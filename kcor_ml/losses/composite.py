@@ -86,6 +86,7 @@ class CompositeLoss(nn.Module):
             component_mask,
             self.config.radial_bins,
             radial_coordinate,
+            self.config.radial_derivative_huber_beta,
         )
         gauge = gauge_loss(output.auxiliary["log_flat_corona"], component_mask)
         log_noise_scale = output.noise_scale.float().clamp_min(1.0e-30).log()
