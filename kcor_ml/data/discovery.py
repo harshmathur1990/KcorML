@@ -13,6 +13,7 @@ from .records import FitsRecord, FramePair, PairManifest
 
 PRODUCT_KEYS = ("PRODUCT", "PRODTYPE", "DATA_PROD", "DATAPROD")
 TIME_KEYS = ("DATE-OBS", "DATE_OBS", "DATEOBS")
+FITS_PATTERNS = ("*.fits", "*.fit", "*.fts", "*.fits.gz", "*.fit.gz", "*.fts.gz")
 
 
 def _header_value(header, keys: tuple[str, ...]) -> str | None:
@@ -31,6 +32,12 @@ def _parse_time(value: str) -> datetime:
     return parsed
 
 
+def find_fits_paths(root: str | Path) -> list[Path]:
+    """Return every supported FITS path below root without reading image data."""
+    root_path = Path(root).expanduser()
+    return sorted({path for pattern in FITS_PATTERNS for path in root_path.rglob(pattern)})
+
+
 def discover_fits(root: str | Path, expected_product: str = "pb2") -> list[FitsRecord]:
     """Read FITS headers and return chronologically ordered pb2 records."""
     try:
@@ -39,8 +46,7 @@ def discover_fits(root: str | Path, expected_product: str = "pb2") -> list[FitsR
         raise RuntimeError("FITS discovery requires astropy; install requirements-ml.txt") from exc
 
     records: list[FitsRecord] = []
-    patterns = ("*.fits", "*.fit", "*.fts", "*.fits.gz", "*.fit.gz", "*.fts.gz")
-    paths = sorted({path for pattern in patterns for path in Path(root).rglob(pattern)})
+    paths = find_fits_paths(root)
     for path in paths:
         header = fits.getheader(path, memmap=True)
         time_value = _header_value(header, TIME_KEYS)
@@ -115,8 +121,36 @@ def create_manifest(
     validation_fraction: float,
     seed: int,
 ) -> PairManifest:
+    root_path = Path(root).expanduser().resolve()
+    candidate_paths = find_fits_paths(root_path)
+    if not candidate_paths:
+        raise ValueError(
+            f"no FITS files found under data root {root_path}; "
+            "update data.root in the experiment configuration"
+        )
     records = discover_fits(root, expected_product)
+    if not records:
+        raise ValueError(
+            f"found {len(candidate_paths)} FITS files under {root_path}, but none matched "
+            f"expected_product={expected_product!r}; inspect PRODUCT/PRODTYPE/DATA_PROD/DATAPROD "
+            "in one FITS header and update data.expected_product"
+        )
     pairs = build_adjacent_pairs(records, maximum_delta_seconds)
+    if not pairs:
+        dates = sorted({record.observing_date for record in records})
+        raise ValueError(
+            f"found {len(records)} matching FITS files across {len(dates)} dates under {root_path}, "
+            f"but no adjacent pairs satisfied 0 < delta_t <= {maximum_delta_seconds:g} seconds "
+            "with identical image shapes; inspect DATE-OBS cadence and NAXIS1/NAXIS2"
+        )
+    dates = sorted({pair.observing_date for pair in pairs})
+    if len(dates) < 3:
+        shown_dates = ", ".join(dates) if dates else "none"
+        raise ValueError(
+            f"found {len(records)} matching FITS files and {len(pairs)} eligible pairs, but they "
+            f"cover only {len(dates)} observing date(s): {shown_dates}. Leakage-safe "
+            "train/validation/test splits require at least three distinct observing dates"
+        )
     return PairManifest(
         product=expected_product,
         maximum_delta_seconds=maximum_delta_seconds,
