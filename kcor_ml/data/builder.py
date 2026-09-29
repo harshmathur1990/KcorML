@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from torch.utils.data import DataLoader
+from torch.utils.data.distributed import DistributedSampler
 
 from ..config import DataConfig
 from .dataset import KCorPairDataset
@@ -19,8 +20,10 @@ class LoaderBundle:
 
 
 class DataBuilder:
-    def __init__(self, config: DataConfig):
+    def __init__(self, config: DataConfig, *, rank: int = 0, world_size: int = 1):
         self.config = config
+        self.rank = rank
+        self.world_size = world_size
 
     def build_dataset(self, manifest: PairManifest, split: str) -> KCorPairDataset:
         if split not in manifest.splits:
@@ -32,10 +35,21 @@ class DataBuilder:
         )
 
     def build_loader(self, dataset: KCorPairDataset, *, shuffle: bool) -> DataLoader:
+        sampler = None
+        if self.world_size > 1:
+            sampler = DistributedSampler(
+                dataset,
+                num_replicas=self.world_size,
+                rank=self.rank,
+                shuffle=shuffle,
+                seed=self.config.seed,
+                drop_last=False,
+            )
         return DataLoader(
             dataset,
             batch_size=self.config.batch_size,
-            shuffle=shuffle,
+            shuffle=shuffle and sampler is None,
+            sampler=sampler,
             num_workers=self.config.num_workers,
             pin_memory=self.config.pin_memory,
             persistent_workers=self.config.num_workers > 0,

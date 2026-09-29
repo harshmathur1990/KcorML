@@ -11,6 +11,7 @@ from kcor_ml.config import ExperimentConfig
 from kcor_ml.data.builder import DataBuilder
 from kcor_ml.data.discovery import create_manifest
 from kcor_ml.data.records import PairManifest
+from kcor_ml.distributed import DistributedContext
 from kcor_ml.inference import predict_pair, write_fits_product
 from kcor_ml.model_builder import ModelBuilder
 from kcor_ml.training.checkpoint import load_checkpoint
@@ -58,47 +59,70 @@ def main() -> None:
     if arguments.index:
         build_manifest(config)
         return
-    print(f"loading pair manifest: {config.data.manifest}", flush=True)
-    manifest = PairManifest.load(config.data.manifest)
-    counts = {split: len(pairs) for split, pairs in manifest.splits.items()}
-    print(f"pair counts: {counts}", flush=True)
-    loaders = DataBuilder(config.data).build(manifest)
-    print(f"building model on requested device: {config.train.device}", flush=True)
-    components = ModelBuilder(config).build()
-    parameter_count = sum(parameter.numel() for parameter in components.model.parameters())
-    device_description = str(components.device)
-    if components.device.type == "cuda":
-        device_description += f" ({torch.cuda.get_device_name(components.device)})"
-    print(
-        f"model ready: parameters={parameter_count:,} device={device_description} "
-        f"mixed_precision={config.train.mixed_precision}",
-        flush=True,
-    )
-    if arguments.train:
-        Trainer(config, components).fit(loaders.train, loaders.validation)
-        return
-    checkpoint = require_checkpoint(arguments)
-    load_checkpoint(checkpoint, model=components.model, map_location=components.device)
-    trainer = Trainer(config, components)
-    if arguments.evaluate:
-        print(trainer.run_epoch(loaders.test, training=False))
-        return
-    dataset = loaders.test.dataset
-    sample = dataset[arguments.pair_index]
-    images = sample["images"].unsqueeze(0).to(components.device)
-    valid = sample["valid_mask"].unsqueeze(0).to(components.device)
-    delta_t = sample["delta_t"].unsqueeze(0).to(components.device)
-    output = predict_pair(components.model, images, valid, delta_t)
-    destination = arguments.output or f"artifacts/prediction_{arguments.pair_index:06d}.fits"
-    Path(destination).parent.mkdir(parents=True, exist_ok=True)
-    write_fits_product(
-        destination,
-        output,
-        valid,
-        source_paths=sample["paths"],
-        checkpoint=checkpoint,
-    )
-    print(f"wrote {destination}")
+    distributed = DistributedContext.initialize(config.train.device)
+    distributed.seed_everything(config.data.seed)
+    try:
+        if distributed.is_main:
+            print(f"loading pair manifest: {config.data.manifest}", flush=True)
+        manifest = PairManifest.load(config.data.manifest)
+        counts = {split: len(pairs) for split, pairs in manifest.splits.items()}
+        if distributed.is_main:
+            print(f"pair counts: {counts}", flush=True)
+            print(
+                f"runtime: world_size={distributed.world_size} "
+                f"batch_size_per_gpu={config.data.batch_size} "
+                f"global_batch_size={config.data.batch_size * distributed.world_size}",
+                flush=True,
+            )
+        loaders = DataBuilder(
+            config.data,
+            rank=distributed.rank,
+            world_size=distributed.world_size,
+        ).build(manifest)
+        if distributed.is_main:
+            print(f"building model on requested device: {config.train.device}", flush=True)
+        components = ModelBuilder(config, distributed).build()
+        parameter_count = sum(parameter.numel() for parameter in components.model.parameters())
+        device_description = str(components.device)
+        if components.device.type == "cuda":
+            device_description += f" ({torch.cuda.get_device_name(components.device)})"
+        if distributed.is_main:
+            print(
+                f"model ready: parameters={parameter_count:,} device={device_description} "
+                f"mixed_precision={config.train.mixed_precision}",
+                flush=True,
+            )
+        if arguments.train:
+            Trainer(config, components).fit(loaders.train, loaders.validation)
+            return
+        checkpoint = require_checkpoint(arguments)
+        load_checkpoint(checkpoint, model=components.model, map_location=components.device)
+        trainer = Trainer(config, components)
+        if arguments.evaluate:
+            metrics = trainer.run_epoch(loaders.test, training=False)
+            if distributed.is_main:
+                print(metrics)
+            return
+        if distributed.enabled:
+            raise RuntimeError("prediction must be launched with plain Python, not torchrun")
+        dataset = loaders.test.dataset
+        sample = dataset[arguments.pair_index]
+        images = sample["images"].unsqueeze(0).to(components.device)
+        valid = sample["valid_mask"].unsqueeze(0).to(components.device)
+        delta_t = sample["delta_t"].unsqueeze(0).to(components.device)
+        output = predict_pair(components.model, images, valid, delta_t)
+        destination = arguments.output or f"artifacts/prediction_{arguments.pair_index:06d}.fits"
+        Path(destination).parent.mkdir(parents=True, exist_ok=True)
+        write_fits_product(
+            destination,
+            output,
+            valid,
+            source_paths=sample["paths"],
+            checkpoint=checkpoint,
+        )
+        print(f"wrote {destination}")
+    finally:
+        distributed.close()
 
 
 if __name__ == "__main__":

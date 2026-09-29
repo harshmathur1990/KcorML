@@ -1,42 +1,49 @@
-"""Construct the configured model and training components.
-
-This module intentionally contains no FSDP or torch.distributed integration.
-"""
+"""Construct model and training components, optionally wrapped with DDP."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
 import torch
+from torch import nn
+from torch.nn.parallel import DistributedDataParallel
 
 from .config import ExperimentConfig
+from .distributed import DistributedContext
 from .losses import CompositeLoss
 from .models import TwoFrameHeteroscedasticDecompositionNet
 
 
 @dataclass(slots=True)
 class TrainingComponents:
-    model: TwoFrameHeteroscedasticDecompositionNet
+    model: nn.Module
     optimizer: torch.optim.Optimizer
     scheduler: torch.optim.lr_scheduler.LRScheduler
     loss: CompositeLoss
     device: torch.device
+    distributed: DistributedContext
 
 
 class ModelBuilder:
-    def __init__(self, config: ExperimentConfig):
+    def __init__(self, config: ExperimentConfig, distributed: DistributedContext | None = None):
         config.validate()
         self.config = config
+        self.distributed = distributed or DistributedContext.initialize(config.train.device)
 
     def resolve_device(self) -> torch.device:
-        requested = self.config.train.device
-        if requested.startswith("cuda") and not torch.cuda.is_available():
-            raise RuntimeError("CUDA was requested but is unavailable; set train.device to 'cpu'")
-        return torch.device(requested)
+        return self.distributed.device
 
-    def build_model(self, device: torch.device | None = None) -> TwoFrameHeteroscedasticDecompositionNet:
+    def build_model(self, device: torch.device | None = None) -> nn.Module:
         device = device or self.resolve_device()
-        return TwoFrameHeteroscedasticDecompositionNet(self.config.model).to(device)
+        model = TwoFrameHeteroscedasticDecompositionNet(self.config.model).to(device)
+        if self.distributed.enabled:
+            model = DistributedDataParallel(
+                model,
+                device_ids=[self.distributed.local_rank],
+                output_device=self.distributed.local_rank,
+                broadcast_buffers=False,
+            )
+        return model
 
     def build(self) -> TrainingComponents:
         device = self.resolve_device()
@@ -52,4 +59,4 @@ class ModelBuilder:
             eta_min=self.config.train.minimum_learning_rate,
         )
         loss = CompositeLoss(self.config.loss).to(device)
-        return TrainingComponents(model, optimizer, scheduler, loss, device)
+        return TrainingComponents(model, optimizer, scheduler, loss, device, self.distributed)

@@ -63,7 +63,7 @@ class Trainer:
             unit="batch",
             dynamic_ncols=True,
             leave=True,
-            disable=not self.config.train.progress_bar,
+            disable=(not self.config.train.progress_bar) or (not self.components.distributed.is_main),
         )
         context = torch.enable_grad if training else torch.no_grad
         with context():
@@ -91,6 +91,7 @@ class Trainer:
                         refresh=True,
                     )
         progress.close()
+        metrics.synchronize(self.components.device)
         return metrics.compute()
 
     def fit(self, train_loader, validation_loader) -> dict[str, float]:
@@ -110,6 +111,9 @@ class Trainer:
         last_validation: dict[str, float] = {}
         for epoch in range(start_epoch, self.config.train.epochs):
             epoch_number = epoch + 1
+            train_sampler = getattr(train_loader, "sampler", None)
+            if hasattr(train_sampler, "set_epoch"):
+                train_sampler.set_epoch(epoch)
             train_metrics = self.run_epoch(train_loader, training=True, epoch=epoch_number)
             validation_metrics = self.run_epoch(
                 validation_loader, training=False, epoch=epoch_number
@@ -117,22 +121,24 @@ class Trainer:
             self.components.scheduler.step()
             last_validation = validation_metrics
             validation_loss = validation_metrics["total"]
-            checkpoint_arguments = dict(
-                model=self.components.model,
-                optimizer=self.components.optimizer,
-                scheduler=self.components.scheduler,
-                epoch=epoch,
-                best_validation_loss=min(best, validation_loss),
-                config=self.config.to_dict(),
-            )
-            save_checkpoint(self.output_dir / "last.pt", **checkpoint_arguments)
-            if validation_loss < best:
-                best = validation_loss
-                checkpoint_arguments["best_validation_loss"] = best
-                save_checkpoint(self.output_dir / "best.pt", **checkpoint_arguments)
-            print(
-                f"epoch={epoch_number} train={train_metrics['total']:.6g} "
-                f"validation={validation_loss:.6g}",
-                flush=True,
-            )
+            if self.components.distributed.is_main:
+                checkpoint_arguments = dict(
+                    model=self.components.model,
+                    optimizer=self.components.optimizer,
+                    scheduler=self.components.scheduler,
+                    epoch=epoch,
+                    best_validation_loss=min(best, validation_loss),
+                    config=self.config.to_dict(),
+                )
+                save_checkpoint(self.output_dir / "last.pt", **checkpoint_arguments)
+                if validation_loss < best:
+                    best = validation_loss
+                    checkpoint_arguments["best_validation_loss"] = best
+                    save_checkpoint(self.output_dir / "best.pt", **checkpoint_arguments)
+                print(
+                    f"epoch={epoch_number} train={train_metrics['total']:.6g} "
+                    f"validation={validation_loss:.6g}",
+                    flush=True,
+                )
+            self.components.distributed.barrier()
         return last_validation

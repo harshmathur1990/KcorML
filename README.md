@@ -86,8 +86,8 @@ The `kcor_ml` package implements the initial modular scaffold described in
 [`docs/ml_approach_plan.yaml`](docs/ml_approach_plan.yaml). Its responsibilities
 are separated into FITS discovery and temporal pairing, datasets and loaders,
 model components, model construction, probabilistic losses, training,
-checkpoints, and FITS inference output. The code intentionally contains no FSDP
-or distributed-training path.
+checkpoints, and FITS inference output. Multi-GPU training uses ordinary
+PyTorch DistributedDataParallel (DDP); the code intentionally contains no FSDP.
 
 Install the additional ML dependencies separately:
 
@@ -101,6 +101,18 @@ Edit `configs/default.json`, then build the leakage-safe pair manifest and train
 python pipeline.py --config configs/default.json --index
 python pipeline.py --config configs/default.json --train
 ```
+
+For single-node multi-GPU training, `batch_size` is interpreted per GPU. For
+example, six processes with `batch_size: 5` use a global batch size of 30:
+
+```sh
+torchrun --standalone --nproc_per_node=6 pipeline.py --config configs/default.json --train
+```
+
+Only rank zero displays the progress bar and writes `best.pt` and `last.pt`.
+Each rank has its own DataLoader workers, so `num_workers: 1` creates six total
+workers in the example above. Checkpoints are saved without a DDP prefix and
+remain loadable by plain single-GPU inference.
 
 Evaluate or generate a multi-extension FITS product with a checkpoint:
 

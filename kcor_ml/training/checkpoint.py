@@ -8,6 +8,11 @@ from typing import Any
 import torch
 
 
+def unwrap_model(model: torch.nn.Module) -> torch.nn.Module:
+    """Return the underlying model so DDP checkpoints remain single-device loadable."""
+    return model.module if hasattr(model, "module") else model
+
+
 def save_checkpoint(
     path: str | Path,
     *,
@@ -23,7 +28,7 @@ def save_checkpoint(
     temporary = destination.with_suffix(destination.suffix + ".tmp")
     torch.save(
         {
-            "model_state": model.state_dict(),
+            "model_state": unwrap_model(model).state_dict(),
             "optimizer_state": optimizer.state_dict(),
             "scheduler_state": scheduler.state_dict(),
             "epoch": epoch,
@@ -44,10 +49,9 @@ def load_checkpoint(
     map_location: str | torch.device = "cpu",
 ) -> dict[str, Any]:
     checkpoint = torch.load(path, map_location=map_location, weights_only=False)
-    model.load_state_dict(checkpoint["model_state"])
+    unwrap_model(model).load_state_dict(checkpoint["model_state"])
     if optimizer is not None and "optimizer_state" in checkpoint:
         optimizer.load_state_dict(checkpoint["optimizer_state"])
     if scheduler is not None and "scheduler_state" in checkpoint:
         scheduler.load_state_dict(checkpoint["scheduler_state"])
     return checkpoint
-
