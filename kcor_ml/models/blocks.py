@@ -53,20 +53,19 @@ class UpsampleBlock(nn.Module):
         return self.residual(self.projection(torch.cat((inputs, skip), dim=1)))
 
 
-class LearnedLinearScaler(nn.Module):
-    """Positive learnable scale that keeps all public outputs in physical units."""
+class FixedLinearScaler(nn.Module):
+    """Fixed physical scale; keeping it fixed removes a decomposition gauge."""
 
-    def __init__(self, initial_scale: float):
+    def __init__(self, scale: float):
         super().__init__()
-        self.log_scale = nn.Parameter(torch.tensor(float(initial_scale)).log())
+        self.register_buffer("fixed_scale", torch.tensor(float(scale)))
 
     @property
     def scale(self) -> torch.Tensor:
-        return self.log_scale.exp()
+        return self.fixed_scale
 
     def forward(self, inputs: torch.Tensor) -> torch.Tensor:
         return inputs / self.scale.clamp_min(torch.finfo(inputs.dtype).tiny)
 
     def inverse(self, inputs: torch.Tensor) -> torch.Tensor:
         return inputs * self.scale
-

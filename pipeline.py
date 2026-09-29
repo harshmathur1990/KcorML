@@ -119,6 +119,7 @@ def main() -> None:
             valid,
             source_paths=sample["paths"],
             checkpoint=checkpoint,
+            observed_images=images,
         )
         print(f"wrote {destination}")
     finally:

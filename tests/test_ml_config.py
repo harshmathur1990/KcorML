@@ -18,7 +18,7 @@ class ExperimentConfigTests(unittest.TestCase):
 
     def test_repository_default_config_loads(self):
         config = ExperimentConfig.load("configs/default.json")
-        self.assertEqual(config.model.name, "tf_hdn")
+        self.assertEqual(config.model.name, "tf_hdn_v2")
         self.assertLessEqual(config.data.max_delta_seconds, 15)
 
     def test_invalid_split_is_rejected(self):
@@ -34,4 +34,3 @@ class ExperimentConfigTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

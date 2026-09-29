@@ -22,6 +22,7 @@ def save_checkpoint(
     epoch: int,
     best_validation_loss: float,
     config: dict[str, Any],
+    diagnostics: dict[str, float] | None = None,
 ) -> None:
     destination = Path(path)
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -34,6 +35,7 @@ def save_checkpoint(
             "epoch": epoch,
             "best_validation_loss": best_validation_loss,
             "config": config,
+            "diagnostics": diagnostics or {},
         },
         temporary,
     )

@@ -60,7 +60,8 @@ class NormalizationDecoder(nn.Module):
         self.decoder = CoarseDecoder(channels, levels, groups, 1)
 
     def forward(self, common: torch.Tensor, output_size: tuple[int, int]) -> torch.Tensor:
-        shared = F.softplus(self.decoder(common, output_size)) + 1.0e-6
+        # This is log(B), not B. Positivity is imposed after the gauge is fixed.
+        shared = self.decoder(common, output_size)
         return shared.expand(-1, 2, -1, -1)
 
 
@@ -70,19 +71,20 @@ class FlatCoronaDecoder(nn.Module):
         self.decoder = SkipDecoder(channels, groups, 1)
 
     def forward(self, common: torch.Tensor, dynamic: torch.Tensor, skips: list[torch.Tensor]) -> torch.Tensor:
-        return F.softplus(self.decoder(common, dynamic, skips)) + 1.0e-6
+        # This is log(C). The model centers it before exponentiation.
+        return self.decoder(common, dynamic, skips)
 
 
 class NoiseDecoder(nn.Module):
     def __init__(self, channels: int, levels: int, groups: int):
         super().__init__()
-        self.decoder = CoarseDecoder(channels, levels, groups, 3)
+        self.decoder = CoarseDecoder(channels, levels, groups, 2)
 
     def forward(
         self, noise_latent: torch.Tensor, output_size: tuple[int, int]
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        location, raw_scale, raw_df = self.decoder(noise_latent, output_size).chunk(3, dim=1)
-        return location, F.softplus(raw_scale), F.softplus(raw_df) + 2.0
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        raw_scale, raw_df = self.decoder(noise_latent, output_size).chunk(2, dim=1)
+        return F.softplus(raw_scale), F.softplus(raw_df) + 2.0
 
 
 class CMEDecoder(nn.Module):

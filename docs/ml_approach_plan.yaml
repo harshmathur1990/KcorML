@@ -37,7 +37,7 @@ constraints:
     - "Read FITS image arrays and metadata."
     - "Reject corrupt files and samples violating the time-separation constraint."
     - "Apply FITS validity, occulting-disk, and missing-pixel masks."
-    - "Convert arrays to tensors and use a learnable in-model input scaling layer."
+    - "Convert arrays to tensors and use a fixed physical input scale inside the model."
     - "Apply training-only geometric augmentation consistently to both frames and labels."
 
 problem_formulation:
@@ -108,8 +108,8 @@ data_contract:
       - "available quality conditions"
 
 model:
-  name: "TwoFrameHeteroscedasticDecompositionNet"
-  abbreviation: "TF-HDN"
+  name: "TwoFrameHeteroscedasticDecompositionNetV2"
+  abbreviation: "TF-HDN-v2"
   input_interface:
     image_tensor_shape: "[B, 2, H, W]"
     additional_inputs:
@@ -117,7 +117,7 @@ model:
       - "valid_mask"
       - "selected metadata embeddings"
     position_encoding: "learned two-dimensional positional embeddings"
-    scaling: "learnable monotonic input scaling initialized for pB dynamic range"
+    scaling: "fixed physical pB scale; it is not trainable and cannot participate in scale collapse"
   encoders:
     count: 2
     weight_sharing: true
@@ -250,6 +250,15 @@ training:
       purpose: "Swapping input frames must swap all frame-specific outputs."
     normalization_bandwidth:
       purpose: "Prevent the normalization decoder from absorbing fine coronal structures."
+    decomposition_gauge:
+      definition: "The valid-pixel geometric mean of each C_i is one, with the removed log-amplitude transferred to B_i so B_i*C_i is unchanged."
+      purpose: "Remove the multiplicative scale ambiguity that collapsed the v1 normalization field."
+    radial_flatness:
+      definition: "Penalize annular means of log(C_i) using FITS solar-center geometry."
+      purpose: "Move the broad radial trend into B_i while preserving angular structure; never divide by annular variance."
+    cross_frame_noise2noise:
+      definition: "Alternate frame 1 -> frame 2 and frame 2 -> frame 1 prediction without forming an image difference."
+      purpose: "Prevent same-frame identity reconstruction and learn signal shared across observations."
     reconstruction_identity:
       definition: "Predicted observation location equals B_i * C_i plus learned noise location."
     cme_segmentation:

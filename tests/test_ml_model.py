@@ -29,6 +29,9 @@ class TFHDNTests(unittest.TestCase):
         self.assertEqual(output.normalization_field.shape, images.shape)
         self.assertTrue(torch.all(output.normalization_field > 0))
         self.assertTrue(torch.all(output.noise_scale > 0))
+        log_flat = output.auxiliary["log_flat_corona"]
+        self.assertTrue(torch.allclose(log_flat.mean(dim=(-2, -1)), torch.zeros(2, 2), atol=1e-5))
+        self.assertFalse(any(name == "scaler.log_scale" for name, _ in self.model.named_parameters()))
         output.observation_location.mean().backward()
         self.assertIsNotNone(self.model.encoder.stem.weight.grad)
 

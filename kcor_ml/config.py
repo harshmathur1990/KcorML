@@ -44,7 +44,7 @@ class DataConfig:
 
 @dataclass(slots=True)
 class ModelConfig:
-    name: str = "tf_hdn"
+    name: str = "tf_hdn_v2"
     channels: tuple[int, ...] = (32, 64, 128, 256)
     blocks_per_level: int = 2
     group_norm_groups: int = 8
@@ -53,9 +53,10 @@ class ModelConfig:
     minimum_noise_scale: float = 1.0e-10
     positional_grid_size: int = 32
     time_scale_seconds: float = 15.0
+    log_component_limit: float = 12.0
 
     def validate(self) -> None:
-        if self.name != "tf_hdn":
+        if self.name != "tf_hdn_v2":
             raise ValueError(f"unsupported model: {self.name}")
         if len(self.channels) < 2 or any(value < 1 for value in self.channels):
             raise ValueError("channels must contain at least two positive values")
@@ -63,6 +64,8 @@ class ModelConfig:
             raise ValueError("blocks_per_level must be positive")
         if self.input_scale <= 0 or self.minimum_noise_scale <= 0 or self.time_scale_seconds <= 0:
             raise ValueError("physical scales must be positive")
+        if self.log_component_limit <= 0:
+            raise ValueError("log_component_limit must be positive")
 
 
 @dataclass(slots=True)
@@ -71,7 +74,25 @@ class LossConfig:
     normalization_bandwidth_weight: float = 1.0e-3
     noise_independence_weight: float = 1.0e-3
     common_consistency_weight: float = 1.0e-2
+    radial_flatness_weight: float = 5.0e-2
+    gauge_weight: float = 1.0e-2
+    radial_bins: int = 32
     cme_weight: float = 0.0
+
+    def validate(self) -> None:
+        weights = (
+            self.observation_weight,
+            self.normalization_bandwidth_weight,
+            self.noise_independence_weight,
+            self.common_consistency_weight,
+            self.radial_flatness_weight,
+            self.gauge_weight,
+            self.cme_weight,
+        )
+        if any(value < 0 for value in weights):
+            raise ValueError("loss weights must be non-negative")
+        if self.radial_bins < 4:
+            raise ValueError("radial_bins must be at least four")
 
 
 @dataclass(slots=True)
@@ -90,6 +111,8 @@ class TrainConfig:
     resume_checkpoint: str | None = None
     log_every_steps: int = 25
     progress_bar: bool = True
+    minimum_normalization_log_std: float = 1.0e-3
+    maximum_log_saturation_fraction: float = 1.0e-3
 
     def validate(self) -> None:
         if self.epochs < 1 or self.learning_rate <= 0:
@@ -102,6 +125,10 @@ class TrainConfig:
             raise ValueError("frame_drop_probability must be in [0, 1)")
         if self.log_every_steps < 1:
             raise ValueError("log_every_steps must be positive")
+        if self.minimum_normalization_log_std < 0:
+            raise ValueError("minimum_normalization_log_std must be non-negative")
+        if not 0 <= self.maximum_log_saturation_fraction <= 1:
+            raise ValueError("maximum_log_saturation_fraction must be in [0, 1]")
 
 
 @dataclass(slots=True)
@@ -114,6 +141,7 @@ class ExperimentConfig:
     def validate(self) -> None:
         self.data.validate()
         self.model.validate()
+        self.loss.validate()
         self.train.validate()
 
     def to_dict(self) -> dict[str, Any]:

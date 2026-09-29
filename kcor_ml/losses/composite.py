@@ -12,8 +12,10 @@ from ..config import LossConfig
 from ..models.outputs import TFHDNOutput
 from .separation import (
     common_dynamic_consistency_loss,
+    gauge_loss,
     noise_independence_loss,
     normalization_bandwidth_loss,
+    radial_flatness_loss,
 )
 from .student_t import student_t_nll
 
@@ -25,6 +27,8 @@ class LossBreakdown:
     normalization_bandwidth: torch.Tensor
     noise_independence: torch.Tensor
     common_consistency: torch.Tensor
+    radial_flatness: torch.Tensor
+    gauge: torch.Tensor
     cme: torch.Tensor
 
     def detached(self) -> dict[str, float]:
@@ -34,6 +38,8 @@ class LossBreakdown:
             "normalization_bandwidth": float(self.normalization_bandwidth.detach()),
             "noise_independence": float(self.noise_independence.detach()),
             "common_consistency": float(self.common_consistency.detach()),
+            "radial_flatness": float(self.radial_flatness.detach()),
+            "gauge": float(self.gauge.detach()),
             "cme": float(self.cme.detach()),
         }
 
@@ -49,6 +55,7 @@ class CompositeLoss(nn.Module):
         target: torch.Tensor,
         loss_mask: torch.Tensor,
         cme_target: torch.Tensor | None = None,
+        radial_coordinate: torch.Tensor | None = None,
     ) -> LossBreakdown:
         observation = student_t_nll(
             target,
@@ -57,7 +64,7 @@ class CompositeLoss(nn.Module):
             output.noise_df,
             loss_mask,
         )
-        bandwidth = normalization_bandwidth_loss(output.auxiliary["normalization_scaled"])
+        bandwidth = normalization_bandwidth_loss(output.auxiliary["log_normalization"])
         independence = 0.5 * (
             noise_independence_loss(output.auxiliary["common"], output.auxiliary["noise_1"])
             + noise_independence_loss(output.auxiliary["common"], output.auxiliary["noise_2"])
@@ -65,15 +72,35 @@ class CompositeLoss(nn.Module):
         consistency = common_dynamic_consistency_loss(
             output.auxiliary["dynamic_1"], output.auxiliary["dynamic_2"]
         )
+        radial_flatness = radial_flatness_loss(
+            output.auxiliary["log_flat_corona"],
+            loss_mask,
+            self.config.radial_bins,
+            radial_coordinate,
+        )
+        gauge = gauge_loss(output.auxiliary["log_flat_corona"], loss_mask)
         if cme_target is None or self.config.cme_weight == 0:
-            cme = output.cme_probability.sum() * 0.0
+            # Mean is safe for full float16 frames and retains a zero-gradient
+            # path through the currently disabled CME decoder for DDP.
+            cme = output.cme_probability.float().mean() * 0.0
         else:
-            cme = F.binary_cross_entropy(output.cme_probability, cme_target.float())
+            cme = F.binary_cross_entropy(output.cme_probability.float(), cme_target.float())
         total = (
             self.config.observation_weight * observation
             + self.config.normalization_bandwidth_weight * bandwidth
             + self.config.noise_independence_weight * independence
             + self.config.common_consistency_weight * consistency
+            + self.config.radial_flatness_weight * radial_flatness
+            + self.config.gauge_weight * gauge
             + self.config.cme_weight * cme
         )
-        return LossBreakdown(total, observation, bandwidth, independence, consistency, cme)
+        return LossBreakdown(
+            total,
+            observation,
+            bandwidth,
+            independence,
+            consistency,
+            radial_flatness,
+            gauge,
+            cme,
+        )

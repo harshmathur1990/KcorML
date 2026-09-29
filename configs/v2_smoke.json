@@ -35,7 +35,7 @@
     "cme_weight": 0.0
   },
   "train": {
-    "epochs": 100,
+    "epochs": 5,
     "learning_rate": 0.0002,
     "weight_decay": 0.0001,
     "minimum_learning_rate": 0.000001,
@@ -43,9 +43,9 @@
     "mixed_precision": false,
     "mask_fraction": 0.05,
     "mask_patch_size": 8,
-    "frame_drop_probability": 0.05,
+    "frame_drop_probability": 0.0,
     "device": "cuda",
-    "output_dir": "artifacts/training_v2",
+    "output_dir": "artifacts/training_v2_smoke",
     "resume_checkpoint": null,
     "log_every_steps": 25,
     "progress_bar": true,

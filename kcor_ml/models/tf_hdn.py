@@ -6,7 +6,7 @@ import torch
 from torch import nn
 
 from ..config import ModelConfig
-from .blocks import LearnedLinearScaler
+from .blocks import FixedLinearScaler
 from .decoders import CMEDecoder, FlatCoronaDecoder, NoiseDecoder, NormalizationDecoder
 from .encoder import SharedImageEncoder
 from .latent import LatentSeparator
@@ -21,7 +21,8 @@ class TwoFrameHeteroscedasticDecompositionNet(nn.Module):
         channels = config.channels
         self.minimum_noise_scale = config.minimum_noise_scale
         self.time_scale_seconds = config.time_scale_seconds
-        self.scaler = LearnedLinearScaler(config.input_scale)
+        self.scaler = FixedLinearScaler(config.input_scale)
+        self.log_component_limit = config.log_component_limit
         self.encoder = SharedImageEncoder(
             channels,
             config.blocks_per_level,
@@ -65,19 +66,44 @@ class TwoFrameHeteroscedasticDecompositionNet(nn.Module):
         latent = self.separator(fused_first[-1], fused_second[-1])
         output_size = images.shape[-2:]
 
-        normalization_scaled = self.normalization_decoder(latent.common, output_size)
-        flat_1 = self.flat_corona_decoder(latent.common, latent.dynamic_1, fused_first)
-        flat_2 = self.flat_corona_decoder(latent.common, latent.dynamic_2, fused_second)
-        flat = torch.cat((flat_1, flat_2), dim=1)
+        log_normalization = self.normalization_decoder(latent.common, output_size).float()
+        log_flat_1 = self.flat_corona_decoder(latent.common, latent.dynamic_1, fused_first)
+        log_flat_2 = self.flat_corona_decoder(latent.common, latent.dynamic_2, fused_second)
+        log_flat = torch.cat((log_flat_1, log_flat_2), dim=1).float()
+
+        # Fix the scalar B*C ambiguity: C has unit geometric mean in every
+        # frame, so the physical amplitude must be carried by B.
+        if valid_mask is None:
+            gauge_mask = torch.ones_like(log_flat, dtype=torch.bool)
+        else:
+            gauge_mask = valid_mask.bool()
+        gauge_weight = gauge_mask.to(log_flat.dtype)
+        gauge_mean = (log_flat * gauge_weight).sum(dim=(-2, -1), keepdim=True) / gauge_weight.sum(
+            dim=(-2, -1), keepdim=True
+        ).clamp_min(1.0)
+        log_flat = log_flat - gauge_mean
+        # Preserve B*C exactly while selecting the gauge. This also makes crop
+        # training and full-frame inference differ only in component scale,
+        # never in the reconstructed physical image.
+        log_normalization = log_normalization + gauge_mean
+
+        limit = self.log_component_limit
+        log_normalization = log_normalization.clamp(-limit, limit)
+        log_flat = log_flat.clamp(-limit, limit)
+        normalization_scaled = log_normalization.exp()
+        flat = log_flat.exp()
         clean_scaled = normalization_scaled * flat
 
-        location_1, scale_1, df_1 = self.noise_decoder(latent.noise_1, output_size)
-        location_2, scale_2, df_2 = self.noise_decoder(latent.noise_2, output_size)
-        noise_location = self.scaler.inverse(torch.cat((location_1, location_2), dim=1))
-        noise_scale = self.scaler.inverse(torch.cat((scale_1, scale_2), dim=1)).clamp_min(
+        scale_1, df_1 = self.noise_decoder(latent.noise_1, output_size)
+        scale_2, df_2 = self.noise_decoder(latent.noise_2, output_size)
+        # Convert decoder outputs to float32 before returning to physical pB
+        # units.  In particular, 1e-8 and 1e-10 underflow in float16.
+        noise_scale = self.scaler.inverse(
+            torch.cat((scale_1, scale_2), dim=1).float()
+        ).clamp_min(
             self.minimum_noise_scale
         )
-        noise_df = torch.cat((df_1, df_2), dim=1)
+        noise_df = torch.cat((df_1, df_2), dim=1).float()
         cme = torch.cat(
             (
                 self.cme_decoder(latent.common, latent.dynamic_1, fused_first),
@@ -86,10 +112,10 @@ class TwoFrameHeteroscedasticDecompositionNet(nn.Module):
             dim=1,
         )
         return TFHDNOutput(
-            clean_pb=self.scaler.inverse(clean_scaled),
+            clean_pb=self.scaler.inverse(clean_scaled.float()),
             flat_corona=flat,
-            normalization_field=self.scaler.inverse(normalization_scaled),
-            noise_location=noise_location,
+            normalization_field=self.scaler.inverse(normalization_scaled.float()),
+            noise_location=torch.zeros_like(clean_scaled, dtype=torch.float32),
             noise_scale=noise_scale,
             noise_df=noise_df,
             cme_probability=cme,
@@ -100,5 +126,8 @@ class TwoFrameHeteroscedasticDecompositionNet(nn.Module):
                 "noise_1": latent.noise_1,
                 "noise_2": latent.noise_2,
                 "normalization_scaled": normalization_scaled,
+                "log_normalization": log_normalization,
+                "log_flat_corona": log_flat,
+                "gauge_mean": gauge_mean,
             },
         )
