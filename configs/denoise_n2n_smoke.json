@@ -1,0 +1,19 @@
+{
+  "manifest": "artifacts/pb2_pairs.json",
+  "output_dir": "artifacts/denoise_n2n_smoke",
+  "crop_size": 256,
+  "batch_size": 8,
+  "num_workers": 4,
+  "epochs": 5,
+  "learning_rate": 0.0002,
+  "minimum_learning_rate": 0.000001,
+  "weight_decay": 0.0001,
+  "gradient_clip": 1.0,
+  "mixed_precision": true,
+  "channels": [32, 64, 128, 256],
+  "blocks_per_level": 2,
+  "profile_frames": 100,
+  "seed": 17,
+  "device": "cuda",
+  "log_every_steps": 50
+}

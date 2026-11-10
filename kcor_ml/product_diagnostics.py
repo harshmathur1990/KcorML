@@ -62,12 +62,39 @@ def _structure_correlation(first: np.ndarray, second: np.ndarray, valid: np.ndar
     return float(abs(np.corrcoef(left, right)[0, 1]))
 
 
+def _correlation(first: np.ndarray, second: np.ndarray) -> float:
+    if first.size < 2 or first.std() == 0 or second.std() == 0:
+        return 0.0
+    return float(np.corrcoef(first, second)[0, 1])
+
+
+def _laplacian_std(array: np.ndarray, valid: np.ndarray) -> float:
+    interior = (
+        valid[1:-1, 1:-1]
+        & valid[:-2, 1:-1]
+        & valid[2:, 1:-1]
+        & valid[1:-1, :-2]
+        & valid[1:-1, 2:]
+    )
+    if not interior.any():
+        return 0.0
+    laplacian = (
+        -4.0 * array[1:-1, 1:-1]
+        + array[:-2, 1:-1]
+        + array[2:, 1:-1]
+        + array[1:-1, :-2]
+        + array[1:-1, 2:]
+    )[interior]
+    return float(laplacian.std())
+
+
 def diagnose_product(
     path: str | Path,
     minimum_log_std: float = 1.0e-3,
     maximum_flat_radial_rms: float = 2.0e-2,
     maximum_noise_structure_correlation: float = 0.5,
     maximum_log_saturation_fraction: float = 1.0e-3,
+    maximum_residual_crossframe_correlation: float = 0.2,
 ) -> dict[str, object]:
     try:
         from astropy.io import fits
@@ -75,10 +102,12 @@ def diagnose_product(
         raise RuntimeError("product diagnostics require astropy") from exc
 
     frames: list[dict[str, float | bool]] = []
+    residuals: list[np.ndarray] = []
     with fits.open(path, memmap=True) as hdus:
         input_scale = hdus[0].header.get("INPSCALE")
         log_limit = hdus[0].header.get("LOGLIMIT")
         valid = np.asarray(hdus["VALID_MASK"].data, dtype=bool)
+        has_observed = "OBSERVED_PB_1" in hdus and "CLEAN_PB_1" in hdus
         for frame in (1, 2):
             normalization = np.asarray(hdus[f"NORM_FIELD_{frame}"].data, dtype=np.float64)
             flat = np.asarray(hdus[f"FLAT_CORONA_{frame}"].data, dtype=np.float64)
@@ -114,8 +143,39 @@ def diagnose_product(
                     np.abs(log_normalization_scaled) >= float(log_limit) - 1.0e-4
                 ) | (np.abs(log_flat) >= float(log_limit) - 1.0e-4)
                 saturation_fraction = float(saturated.mean())
+            separation: dict[str, float] = {
+                # A flat corona carrying a negligible share of the log signal
+                # means the normalization field has absorbed the corona.
+                "flat_log_variance_share": float(
+                    log_flat.var() / max((log_normalization + log_flat).var(), 1.0e-30)
+                ),
+                "clean_normalization_log_correlation": _correlation(
+                    log_normalization + log_flat, log_normalization
+                ),
+                "noise_normalization_log_correlation": _correlation(
+                    log_noise_image[positive], log_normalization
+                ),
+            }
+            if has_observed:
+                observed = np.asarray(hdus[f"OBSERVED_PB_{frame}"].data, dtype=np.float64)
+                clean = np.asarray(hdus[f"CLEAN_PB_{frame}"].data, dtype=np.float64)
+                residual = observed - clean
+                residuals.append(residual)
+                standardized = residual[positive] / noise[positive]
+                observed_fine = _laplacian_std(observed, positive)
+                separation.update(
+                    {
+                        "standardized_residual_mean": float(standardized.mean()),
+                        "standardized_residual_median_abs": float(np.median(np.abs(standardized))),
+                        "coverage_1sigma": float((np.abs(standardized) < 1.0).mean()),
+                        "coverage_2sigma": float((np.abs(standardized) < 2.0).mean()),
+                        "fine_structure_ratio": _laplacian_std(clean, positive)
+                        / max(observed_fine, 1.0e-30),
+                    }
+                )
             frames.append(
                 {
+                    **separation,
                     "frame": frame,
                     "finite_positive": bool(positive.sum() == valid.sum()),
                     "normalization_log_std": float(log_normalization.std()),
@@ -130,9 +190,20 @@ def diagnose_product(
                 }
             )
 
-    eligible = all(
+    # The two frames are 15 s apart, so their noise is independent while the
+    # corona is nearly identical. A residual shared by both frames is coronal
+    # structure the reconstruction failed to keep.
+    residual_crossframe_correlation = None
+    if len(residuals) == 2:
+        residual_crossframe_correlation = _correlation(residuals[0][valid], residuals[1][valid])
+
+    # Gate on the radial statistic, matching training checkpoint eligibility.
+    eligible = (
+        residual_crossframe_correlation is None
+        or residual_crossframe_correlation <= maximum_residual_crossframe_correlation
+    ) and all(
         frame.get("finite_positive", False)
-        and frame.get("normalization_log_std", 0.0) >= minimum_log_std
+        and frame.get("normalization_radial_log_std", 0.0) >= minimum_log_std
         and frame.get("flat_radial_rms", float("inf")) <= maximum_flat_radial_rms
         and frame.get("noise_structure_correlation", float("inf"))
         <= maximum_noise_structure_correlation
@@ -140,4 +211,9 @@ def diagnose_product(
         <= maximum_log_saturation_fraction
         for frame in frames
     )
-    return {"path": str(path), "eligible": eligible, "frames": frames}
+    return {
+        "path": str(path),
+        "eligible": eligible,
+        "residual_crossframe_correlation": residual_crossframe_correlation,
+        "frames": frames,
+    }

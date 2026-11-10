@@ -35,6 +35,25 @@ class SeparationLossTests(unittest.TestCase):
         self.assertGreater(float(copied), 0.99)
         self.assertEqual(float(smooth), 0.0)
 
+    def test_degenerate_losses_have_finite_gradients(self):
+        from kcor_ml.losses.separation import (
+            common_dynamic_consistency_loss,
+            noise_structure_correlation_loss,
+        )
+
+        # A noise scale clamped to its minimum is spatially constant; this
+        # produced NaN gradients that poisoned DDP weights during training.
+        flat = torch.randn(1, 2, 16, 16, requires_grad=True)
+        noise = torch.zeros(1, 2, 16, 16, requires_grad=True)
+        mask = torch.ones(1, 2, 16, 16, dtype=torch.bool)
+        noise_structure_correlation_loss(flat, noise, mask).backward()
+        self.assertTrue(torch.isfinite(flat.grad).all())
+        self.assertTrue(torch.isfinite(noise.grad).all())
+
+        dynamic = torch.zeros(2, 4, 8, 8, requires_grad=True)
+        common_dynamic_consistency_loss(dynamic, torch.randn(2, 4, 8, 8)).backward()
+        self.assertTrue(torch.isfinite(dynamic.grad).all())
+
     def test_radial_derivative_loss_is_resolution_invariant(self):
         from kcor_ml.losses.separation import radial_flatness_loss
 

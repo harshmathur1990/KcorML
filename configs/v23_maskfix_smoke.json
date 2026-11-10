@@ -1,0 +1,63 @@
+{
+  "data": {
+    "root": "data",
+    "manifest": "artifacts/pb2_pairs.json",
+    "expected_product": "pb",
+    "max_delta_seconds": 15.0,
+    "crop_size": 256,
+    "batch_size": 5,
+    "num_workers": 4,
+    "pin_memory": true,
+    "train_fraction": 0.8,
+    "validation_fraction": 0.1,
+    "seed": 17,
+    "full_diagnostic_samples": 12
+  },
+  "model": {
+    "name": "tf_hdn_v23",
+    "channels": [32, 64, 128, 256],
+    "blocks_per_level": 2,
+    "group_norm_groups": 8,
+    "maximum_offset_pixels": 4.0,
+    "input_scale": 1e-8,
+    "minimum_noise_scale": 1e-10,
+    "positional_grid_size": 32,
+    "time_scale_seconds": 15.0,
+    "log_component_limit": 18.0,
+    "normalization_grid_size": 8,
+    "noise_grid_size": 8
+  },
+  "loss": {
+    "observation_weight": 1.0,
+    "normalization_bandwidth_weight": 0.1,
+    "noise_independence_weight": 0.001,
+    "common_consistency_weight": 0.01,
+    "radial_flatness_weight": 2.0,
+    "noise_smoothness_weight": 0.05,
+    "noise_structure_weight": 0.05,
+    "gauge_weight": 0.01,
+    "radial_bins": 32,
+    "radial_derivative_huber_beta": 0.1,
+    "cme_weight": 0.0
+  },
+  "train": {
+    "epochs": 5,
+    "learning_rate": 0.0002,
+    "weight_decay": 0.0001,
+    "minimum_learning_rate": 0.000001,
+    "gradient_clip": 1.0,
+    "mixed_precision": false,
+    "mask_fraction": 0.05,
+    "mask_patch_size": 8,
+    "frame_drop_probability": 0.0,
+    "device": "cuda",
+    "output_dir": "artifacts/training_v23_maskfix_smoke",
+    "resume_checkpoint": null,
+    "log_every_steps": 25,
+    "progress_bar": false,
+    "minimum_normalization_log_std": 0.001,
+    "maximum_log_saturation_fraction": 0.001,
+    "maximum_flat_radial_rms": 0.02,
+    "maximum_noise_structure_correlation": 0.5
+  }
+}

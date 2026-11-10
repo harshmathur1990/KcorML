@@ -43,8 +43,8 @@ def common_dynamic_consistency_loss(
     """Keep the average scale of the two frame-specific pathways comparable."""
     dynamic_1 = dynamic_1.float()
     dynamic_2 = dynamic_2.float()
-    first_scale = dynamic_1.square().mean(dim=(1, 2, 3)).sqrt()
-    second_scale = dynamic_2.square().mean(dim=(1, 2, 3)).sqrt()
+    first_scale = dynamic_1.square().mean(dim=(1, 2, 3)).clamp_min(1.0e-24).sqrt()
+    second_scale = dynamic_2.square().mean(dim=(1, 2, 3)).clamp_min(1.0e-24).sqrt()
     return (first_scale - second_scale).abs().mean()
 
 
@@ -164,7 +164,9 @@ def noise_structure_correlation_loss(
             right = laplacian(noise[batch, frame])
             left = left - left.mean()
             right = right - right.mean()
-            denominator = left.square().sum().sqrt() * right.square().sum().sqrt()
-            correlation = (left * right).sum() / denominator.clamp_min(1.0e-12)
+            # Clamp before the square root: a spatially constant noise scale
+            # (e.g. at its minimum) otherwise yields 0 * inf = NaN gradients.
+            denominator = (left.square().sum() * right.square().sum()).clamp_min(1.0e-24).sqrt()
+            correlation = (left * right).sum() / denominator
             losses.append(correlation.square())
     return torch.stack(losses).mean() if losses else flat.new_zeros(())

@@ -2,3 +2,6 @@
 __pycache__/
 /data/
 *.pyc
+/artifacts/
+/data_2026/
+/data_events/

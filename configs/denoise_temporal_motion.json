@@ -1,0 +1,29 @@
+{
+  "cache_dir": "/dev/shm/harshm_kcor_cache",
+  "manifest": "artifacts/pb2_pairs.json",
+  "output_dir": "artifacts/denoise_temporal_motion",
+  "neighbours": 4,
+  "maximum_step_seconds": 20.0,
+  "crop_size": 256,
+  "batch_size": 8,
+  "num_workers": 6,
+  "epochs": 15,
+  "learning_rate": 0.0002,
+  "minimum_learning_rate": 1e-06,
+  "weight_decay": 0.0001,
+  "gradient_clip": 1.0,
+  "mixed_precision": true,
+  "channels": [
+    32,
+    64,
+    128,
+    256
+  ],
+  "blocks_per_level": 2,
+  "profile_frames": 100,
+  "seed": 17,
+  "device": "cuda",
+  "log_every_steps": 50,
+  "moving_feature_probability": 0.5,
+  "maximum_feature_speed": 6.0
+}
